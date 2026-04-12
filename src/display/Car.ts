@@ -29,7 +29,7 @@ const SUSPENSION_REST = 0.5;
 // this shift is purely cosmetic and has no effect on physics. Tuned so the
 // chassis bottom lines up roughly with the tops of the tires.
 const BODY_VISUAL_LIFT = 0.2;
-const MAX_ENGINE_FORCE = 320;
+const MAX_ENGINE_FORCE = 270;
 const MAX_REVERSE_FORCE = 150; // reverse is roughly half-speed of forward
 // Brake force directly bites into the wheels via friction. Even small
 // values are amplified by tire grip → large effective deceleration. We
@@ -64,6 +64,13 @@ const REVERSE_EXIT_SPEED  = 1.5;
 
 const FLIP_THRESHOLD = 0.3;
 const FLIP_RECOVERY_TIME = 1.5;
+
+// --- Drift (pure cheat) -----------------------------------------------------
+const DRIFT_RAMP_SPEED = 6.67;        // blend 0→1 in ~0.15s
+// Tunable at runtime via driftTuning (debug sliders).
+export const driftTuning = {
+  extraRadius: 130,    // extra turn radius in meters at full steer
+};
 
 type CarMode = 'drive' | 'reverse';
 
@@ -119,7 +126,11 @@ export class Car {
   wheelMeshes: THREE.Mesh[] = [];
 
   // Latest input from phone/AI/keyboard
-  input: InputState = { steer: 0, brake: 0 };
+  input: InputState = { steer: 0, brake: 0, drift: false };
+  // 0 = normal grip, 1 = full drift. Ramps in, snaps out.
+  private driftBlend = 0;
+  // Speed captured when drift activates — preserved throughout the drift.
+  private driftSpeed = 0;
 
   // Cached for HUD: speed in m/s, derived each step.
   speed = 0;
@@ -295,7 +306,21 @@ export class Car {
       return;
     }
 
-    // 1. Front-wheel steering — normal in all modes.
+    // 0. Drift blend: ramp in, snap out.
+    const wasDrifting = this.driftBlend > 0;
+    if (this.input.drift) {
+      this.driftBlend = Math.min(1, this.driftBlend + DRIFT_RAMP_SPEED * dt);
+    } else {
+      this.driftBlend = 0;
+    }
+
+    // Capture speed when drift starts.
+    if (this.driftBlend > 0 && !wasDrifting) {
+      const vel = this.body.linvel();
+      this.driftSpeed = Math.hypot(vel.x, vel.z);
+    }
+
+    // 1. Front-wheel steering — normal, unmodified.
     const steerMag = Math.abs(this.input.steer);
     this.vehicle.setWheelSteering(2, -this.input.steer * MAX_STEER_RAD);
     this.vehicle.setWheelSteering(3, -this.input.steer * MAX_STEER_RAD);
@@ -341,10 +366,68 @@ export class Car {
     this.vehicle.setWheelEngineForce(1, engineForce);
     for (let i = 0; i < 4; i++) this.vehicle.setWheelBrake(i, brakeForce);
 
+    // During drift, reduce side friction so Rapier doesn't fight the velocity
+    // rotation in postStep. Speed loss is handled by postStep's preservation.
+    if (this.driftBlend > 0) {
+      const sf = 1.0 - 0.7 * this.driftBlend; // 1.0 → 0.3
+      for (let i = 0; i < 4; i++) this.vehicle.setWheelSideFrictionStiffness(i, sf);
+    } else {
+      for (let i = 0; i < 4; i++) this.vehicle.setWheelSideFrictionStiffness(i, 1.0);
+    }
+
     this.vehicle.updateVehicle(dt);
 
     this.speed = Math.hypot(v.x, v.z);
     this.checkFlipRecovery(dt);
+  }
+
+  // Called by RaceSim AFTER world.step(). Pure cheat drift:
+  // Normal physics runs untouched. We then rotate the velocity vector by
+  // an extra amount in the steer direction and preserve speed. That's it.
+  //
+  // - The heading follows naturally via wheel side friction.
+  // - The drift angle = gap between velocity (rotated ahead) and heading
+  //   (catching up) — the rear visually breaks out.
+  // - Speed is preserved so turning doesn't cost energy.
+  postStep(): void {
+    if (this.driftBlend <= 0) return;
+    // Skip drift when airborne — no wheels on the ground means no drift.
+    const grounded =
+      this.vehicle.wheelIsInContact(0) || this.vehicle.wheelIsInContact(1) ||
+      this.vehicle.wheelIsInContact(2) || this.vehicle.wheelIsInContact(3);
+    if (!grounded) return;
+    const db = this.driftBlend;
+
+    const vel = this.body.linvel();
+    const speed = Math.hypot(vel.x, vel.z);
+    if (speed < 2) return;
+
+    // 1. Rotate velocity vector extra in steer direction.
+    //    extraTurn = speed / extraRadius — same radius at any speed.
+    const dt = 1 / 60;
+    const extraTurn = speed / Math.max(1, driftTuning.extraRadius);
+    const angle = this.input.steer * extraTurn * db * dt;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    let vx = vel.x * cos - vel.z * sin;
+    let vz = vel.x * sin + vel.z * cos;
+
+    // 2. Preserve speed — but accept sudden drops (wall hits).
+    //    If current speed dropped below 70% of drift speed, adopt the lower
+    //    speed as the new baseline instead of forcing it back up.
+    if (speed < this.driftSpeed * 0.7) {
+      this.driftSpeed = speed;
+    }
+    const targetSpeed = Math.max(this.driftSpeed, speed);
+    const newSpeed = Math.hypot(vx, vz);
+    if (newSpeed > 0.1) {
+      const s = targetSpeed / newSpeed;
+      vx *= s;
+      vz *= s;
+    }
+
+    this.body.setLinvel({ x: vx, y: vel.y, z: vz }, true);
+    this.speed = targetSpeed;
   }
 
   // State machine for `mode`. Each transition has hysteresis so a single
@@ -454,6 +537,14 @@ export class Car {
 
     this.mesh.position.lerpVectors(this.prevPosition, curPos, alpha);
     this.mesh.quaternion.slerpQuaternions(this.prevQuaternion, curQuat, alpha);
+
+    // Drift visual: rotate the mesh extra into the turn so the rear
+    // visually breaks out. ~15° at full steer + full blend.
+    if (this.driftBlend > 0) {
+      const driftYaw = -this.input.steer * this.driftBlend * 0.07; // ~4°
+      _tmpQuat.setFromAxisAngle(_tmpVec.set(0, 1, 0), driftYaw);
+      this.mesh.quaternion.multiply(_tmpQuat);
+    }
 
     // Wheels: read each wheel's chassis-local position from the vehicle controller.
     for (let i = 0; i < 4; i++) {

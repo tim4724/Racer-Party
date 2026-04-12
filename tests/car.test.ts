@@ -17,10 +17,10 @@ function makeCar(carId = 0): Car {
 describe('Car (no-physics surface)', () => {
   test('applyInput stores the latest steer and brake', () => {
     const car = makeCar();
-    car.applyInput({ steer: 0.5, brake: 0.2 });
+    car.applyInput({ steer: 0.5, brake: 0.2, drift: false });
     expect(car.input.steer).toBe(0.5);
     expect(car.input.brake).toBe(0.2);
-    car.applyInput({ steer: -1, brake: 1 });
+    car.applyInput({ steer: -1, brake: 1, drift: false });
     expect(car.input.steer).toBe(-1);
     expect(car.input.brake).toBe(1);
   });

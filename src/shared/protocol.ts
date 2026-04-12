@@ -5,7 +5,7 @@ export const RELAY_URL = 'wss://ws.couch-games.com';
 export const MSG = {
   // Controller → Display
   HELLO: 'hello',           // { name }
-  INPUT: 'input',           // { steer: -1..1, brake: 0..1 }
+  INPUT: 'input',           // { steer: -1..1, brake: 0..1, drift: bool }
   START_RACE: 'start_race', // any player can request — display gates
   PAUSE_GAME: 'pause_game',
   RESUME_GAME: 'resume_game',
@@ -42,8 +42,9 @@ export type RoomState = (typeof ROOM_STATE)[keyof typeof ROOM_STATE];
 
 // Continuous input — controller streams to display.
 export interface InputState {
-  steer: number; // -1..1
-  brake: number; // 0..1
+  steer: number;  // -1..1
+  brake: number;  // 0..1
+  drift: boolean; // true while drifting
 }
 
 // Per-player welcome payload.
@@ -54,6 +55,10 @@ export interface WelcomePayload {
   name: string;
   roomState: RoomState;
   totalLaps: number;
+  // Present only for players who are part of the active race. Omitted for
+  // late joiners so the controller can distinguish "rejoin" from "wait".
+  // Mirrors Tetris's `alive` field pattern.
+  inGame?: boolean;
 }
 
 export interface LobbyUpdatePayload {

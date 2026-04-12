@@ -14,11 +14,11 @@ import {
 } from '@shared/protocol';
 
 const PING_INTERVAL_MS = 1000;
-const PONG_TIMEOUT_MS = 4000;
+const PONG_TIMEOUT_MS = 3000;
 const INPUT_KEEPALIVE_MS = 50; // ~20 Hz max
 
 export interface ControllerConnectionCallbacks {
-  onWelcome: (carId: number, color: string, name: string, roomState: string) => void;
+  onWelcome: (carId: number, color: string, name: string, roomState: string, inGame: boolean) => void;
   onLobbyUpdate: (players: Array<{ id: string; name: string; color: string }>) => void;
   onReturnToLobby: () => void;
   onCountdown: (value: 1 | 2 | 3 | 'GO') => void;
@@ -42,8 +42,9 @@ export class ControllerConnection {
 
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private lastPongTime = 0;
+  private pongTimedOut = false;
   private lastInputSent = 0;
-  private lastInputState: InputState = { steer: 0, brake: 0 };
+  private lastInputState: InputState = { steer: 0, brake: 0, drift: false };
   // gameCancelled is set when the display rejects this client (room full,
   // race in progress). It causes inbound game broadcasts to be ignored so
   // a kicked player doesn't get yanked back into a game by stale messages.
@@ -55,15 +56,21 @@ export class ControllerConnection {
     this.roomCode = roomCode;
     this.callbacks = callbacks;
 
+    // If the URL has ?rejoin=<id>, use that clientId so the relay recognises
+    // this connection as the same peer that disconnected (same slot, same car).
+    const rejoinId = new URLSearchParams(location.search).get('rejoin');
+
     // Stable per-room client id, restored across reloads.
-    let id: string | null = null;
-    try {
-      id = sessionStorage.getItem('racer_client_' + this.roomCode);
-    } catch { /* ignore */ }
+    let id: string | null = rejoinId;
+    if (!id) {
+      try {
+        id = sessionStorage.getItem('racer_client_' + this.roomCode);
+      } catch { /* ignore */ }
+    }
     if (!id) {
       id = (crypto as any).randomUUID ? crypto.randomUUID() : 'cli-' + Math.random().toString(36).slice(2, 12);
-      try { sessionStorage.setItem('racer_client_' + this.roomCode, id); } catch { /* ignore */ }
     }
+    try { sessionStorage.setItem('racer_client_' + this.roomCode, id); } catch { /* ignore */ }
     this.clientId = id;
   }
 
@@ -127,6 +134,8 @@ export class ControllerConnection {
   }
 
   // Called from visibilitychange → restart pings if alive, reconnect otherwise.
+  // Matches Tetris: if WS is alive, just restart pings (PONG will clear the
+  // overlay). If WS is dead, reconnect (which sends HELLO on 'joined').
   refreshOnFocus(): void {
     if (this.gameCancelled) return;
     if (this.party?.connected) {
@@ -154,6 +163,7 @@ export class ControllerConnection {
           data.color ?? '#fff',
           data.name ?? '',
           data.roomState ?? 'lobby',
+          data.inGame !== undefined,
         );
         break;
       case MSG.ERROR: {
@@ -192,7 +202,12 @@ export class ControllerConnection {
       }
       case MSG.PONG:
         this.lastPongTime = Date.now();
+        this.pongTimedOut = false;
         if (typeof data.t === 'number') this.updatePingDisplay(Date.now() - data.t);
+        // Every PONG confirms the connection is alive — always clear the
+        // reconnect overlay and reset attempts. Matches Tetris's approach.
+        this.party?.resetReconnectCount();
+        this.callbacks.onConnected();
         break;
     }
   }
@@ -240,12 +255,13 @@ export class ControllerConnection {
     const now = performance.now();
     const changed =
       Math.abs(input.steer - this.lastInputState.steer) > 0.02 ||
-      Math.abs(input.brake - this.lastInputState.brake) > 0.02;
+      Math.abs(input.brake - this.lastInputState.brake) > 0.02 ||
+      input.drift !== this.lastInputState.drift;
     const overdue = now - this.lastInputSent > INPUT_KEEPALIVE_MS;
     if (!changed && !overdue) return;
-    this.lastInputState = { steer: input.steer, brake: input.brake };
+    this.lastInputState = { steer: input.steer, brake: input.brake, drift: input.drift };
     this.lastInputSent = now;
-    this.party.sendTo('display', { type: MSG.INPUT, steer: input.steer, brake: input.brake });
+    this.party.sendTo('display', { type: MSG.INPUT, steer: input.steer, brake: input.brake, drift: input.drift });
   }
 
   // ---- Ping / Pong ----
@@ -253,10 +269,16 @@ export class ControllerConnection {
   private startPing(): void {
     this.stopPing();
     this.lastPongTime = Date.now();
+    this.pongTimedOut = false;
     this.pingTimer = setInterval(() => {
       this.party?.sendTo('display', { type: MSG.PING, t: Date.now() });
       if (Date.now() - this.lastPongTime > PONG_TIMEOUT_MS) {
         this.updatePingDisplay(-1);
+        // Show disconnect overlay once when pongs stop arriving.
+        if (!this.pongTimedOut) {
+          this.pongTimedOut = true;
+          this.callbacks.onReconnecting(0, 0, false);
+        }
       }
     }, PING_INTERVAL_MS);
   }

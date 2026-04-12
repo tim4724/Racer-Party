@@ -54,7 +54,7 @@ describe('detectMode', () => {
 
 describe('dragToInput', () => {
   test('idle mode emits zero', () => {
-    expect(dragToInput(100, 100, 'idle')).toEqual({ steer: 0, brake: 0 });
+    expect(dragToInput(100, 100, 'idle')).toEqual({ steer: 0, brake: 0, drift: false });
   });
 
   // ----- STEER mode -----
@@ -103,7 +103,7 @@ describe('dragToInput', () => {
   });
 
   test('upward drag never produces brake even in brake mode', () => {
-    expect(dragToInput(0, -200, 'brake')).toEqual({ steer: 0, brake: 0 });
+    expect(dragToInput(0, -200, 'brake')).toEqual({ steer: 0, brake: 0, drift: false });
   });
 
   test('brake mode brake input saturates at MAX_DRAG', () => {

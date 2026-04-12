@@ -46,6 +46,7 @@ function stepN(world: RAPIER.World, car: Car, n: number, dt = 1 / 60): void {
   for (let i = 0; i < n; i++) {
     car.step(dt);
     world.step();
+    car.postStep();
   }
 }
 
@@ -53,7 +54,7 @@ describe('Car physics — forward motion', () => {
   test('default input (auto-throttle) accelerates the car forward (+Z spawn)', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 120); // 2 seconds
 
     const t = car.body.translation();
@@ -70,7 +71,7 @@ describe('Car physics — forward motion', () => {
   test('default input accelerates the car forward when spawned facing +X', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(1, 0, 0));
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 120);
 
     const t = car.body.translation();
@@ -85,7 +86,7 @@ describe('Car physics — forward motion', () => {
   test('full brake from rest reverses the car (brake → reverse fallthrough)', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
-    car.applyInput({ steer: 0, brake: 1 });
+    car.applyInput({ steer: 0, brake: 1, drift: false });
     stepN(world, car, 120);
 
     const t = car.body.translation();
@@ -98,7 +99,7 @@ describe('Car physics — forward motion', () => {
   test('car settles on the ground (does not fall through or hover)', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
-    car.applyInput({ steer: 0, brake: 1 }); // hold still
+    car.applyInput({ steer: 0, brake: 1, drift: false }); // hold still
     stepN(world, car, 120);
 
     const t = car.body.translation();
@@ -119,12 +120,12 @@ describe('Car physics — forward motion', () => {
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
 
     // Countdown: 3s of brake.
-    car.applyInput({ steer: 0, brake: 1 });
+    car.applyInput({ steer: 0, brake: 1, drift: false });
     stepN(world, car, 180);
     const zAfterFreeze = car.body.translation().z;
 
     // Race start: clear input (this is what RaceSim.startRace must do).
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 180); // 3s of racing
 
     const tAfter = car.body.translation();
@@ -136,7 +137,7 @@ describe('Car physics — forward motion', () => {
   test('acceleration is brisk: car reaches > 15 m/s after 2s of auto-throttle', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 120);
     const v = car.body.linvel();
     expect(v.z).toBeGreaterThan(15);
@@ -147,17 +148,17 @@ describe('Car physics — forward motion', () => {
     // brake while turning carries the same speed as a no-brake turn.
     const w1 = makeWorldWithGround();
     const c1 = spawnCar(w1, new THREE.Vector3(0, 0, 1));
-    c1.applyInput({ steer: 0, brake: 0 });
+    c1.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(w1, c1, 120);
-    c1.applyInput({ steer: 1, brake: 0 });
+    c1.applyInput({ steer: 1, brake: 0, drift: false });
     stepN(w1, c1, 30);
     const noBrakeSpeed = Math.hypot(c1.body.linvel().x, c1.body.linvel().z);
 
     const w2 = makeWorldWithGround();
     const c2 = spawnCar(w2, new THREE.Vector3(0, 0, 1));
-    c2.applyInput({ steer: 0, brake: 0 });
+    c2.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(w2, c2, 120);
-    c2.applyInput({ steer: 1, brake: 0.3 });
+    c2.applyInput({ steer: 1, brake: 0.3, drift: false });
     stepN(w2, c2, 30);
     const smallBrakeSpeed = Math.hypot(c2.body.linvel().x, c2.body.linvel().z);
 
@@ -169,14 +170,14 @@ describe('Car physics — forward motion', () => {
     // Straight-line accel baseline.
     const w1 = makeWorldWithGround();
     const c1 = spawnCar(w1, new THREE.Vector3(0, 0, 1));
-    c1.applyInput({ steer: 0, brake: 0 });
+    c1.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(w1, c1, 120);
     const straightSpeed = Math.hypot(c1.body.linvel().x, c1.body.linvel().z);
 
     // Same time, full steer lock.
     const w2 = makeWorldWithGround();
     const c2 = spawnCar(w2, new THREE.Vector3(0, 0, 1));
-    c2.applyInput({ steer: 1, brake: 0 });
+    c2.applyInput({ steer: 1, brake: 0, drift: false });
     stepN(w2, c2, 120);
     const steeredSpeed = Math.hypot(c2.body.linvel().x, c2.body.linvel().z);
 
@@ -187,7 +188,7 @@ describe('Car physics — forward motion', () => {
   test('top speed reaches > 35 m/s after a long straight', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     // 6s of acceleration on flat ground.
     stepN(world, car, 360);
     const v = car.body.linvel();
@@ -208,14 +209,14 @@ describe('Car physics — forward motion', () => {
 
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
     // Drive forward into the wall.
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 180);
     const tAtWall = car.body.translation();
     expect(tAtWall.z).toBeGreaterThan(2); // got close to wall
     expect(tAtWall.z).toBeLessThan(8);    // didn't pass through
 
     // Now hold the brake — should reverse out.
-    car.applyInput({ steer: 0, brake: 1 });
+    car.applyInput({ steer: 0, brake: 1, drift: false });
     stepN(world, car, 180); // 3s
     const tAfterReverse = car.body.translation();
     const vAfterReverse = car.body.linvel();
@@ -237,11 +238,11 @@ describe('Car physics — forward motion', () => {
   function steeringDrift(forward: THREE.Vector3, steerInput: number): number {
     const world = makeWorldWithGround();
     const car = spawnCar(world, forward);
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 60); // 1s warmup
     const start = car.body.translation();
     const startVec = new THREE.Vector3(start.x, 0, start.z);
-    car.applyInput({ steer: steerInput, brake: 0 });
+    car.applyInput({ steer: steerInput, brake: 0, drift: false });
     stepN(world, car, 90); // 1.5s steering
     const end = car.body.translation();
     const endVec = new THREE.Vector3(end.x, 0, end.z);
@@ -265,7 +266,7 @@ describe('Car physics — forward motion', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
     // Start braking from rest (no warmup).
-    car.applyInput({ steer: 1, brake: 1 });
+    car.applyInput({ steer: 1, brake: 1, drift: false });
     stepN(world, car, 90); // 1.5s
     const v = car.body.linvel();
     // Reverse means forward velocity is negative (along the original +Z spawn).
@@ -285,7 +286,7 @@ describe('Car physics — forward motion', () => {
     // but short enough that the car doesn't pivot 180° at full lock).
     const w1 = makeWorldWithGround();
     const c1 = spawnCar(w1, new THREE.Vector3(0, 0, 1));
-    c1.applyInput({ steer: 0, brake: 1 });
+    c1.applyInput({ steer: 0, brake: 1, drift: false });
     stepN(w1, c1, 90);
     const baseline = c1.body.translation();
     expect(c1.body.linvel().z).toBeLessThan(-0.5);
@@ -293,7 +294,7 @@ describe('Car physics — forward motion', () => {
     // Steer-right reverse.
     const w2 = makeWorldWithGround();
     const c2 = spawnCar(w2, new THREE.Vector3(0, 0, 1));
-    c2.applyInput({ steer: 1, brake: 1 });
+    c2.applyInput({ steer: 1, brake: 1, drift: false });
     stepN(w2, c2, 90);
     const t = c2.body.translation();
 
@@ -344,7 +345,7 @@ describe('Car physics — forward motion', () => {
   test('upside-down car auto-recovers after ~1.5 seconds', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 30);
 
     // Manually flip the chassis 180° around its forward axis (roll over).
@@ -358,7 +359,7 @@ describe('Car physics — forward motion', () => {
     expect(upY0).toBeLessThan(0); // pointing down
 
     // 1.5s + a couple frames should trigger recovery.
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 95);
 
     const r1 = car.body.rotation();
@@ -374,12 +375,12 @@ describe('Car physics — forward motion', () => {
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
 
     // Get up to speed.
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 180); // 3s
     expect(car.body.linvel().z).toBeGreaterThan(5);
 
     // Slam on the brakes.
-    car.applyInput({ steer: 0, brake: 1 });
+    car.applyInput({ steer: 0, brake: 1, drift: false });
     stepN(world, car, 60); // 1s
 
     // Chassis local up should still point roughly toward world +Y.
@@ -398,13 +399,13 @@ describe('Car physics — forward motion', () => {
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
 
     // Get up to speed.
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 120);
     const vBefore = car.body.linvel().z;
     expect(vBefore).toBeGreaterThan(5);
 
     // Apply a SMALL brake input for 1 second.
-    car.applyInput({ steer: 0, brake: 0.2 });
+    car.applyInput({ steer: 0, brake: 0.2, drift: false });
     stepN(world, car, 60);
     const vAfter = car.body.linvel().z;
 
@@ -416,18 +417,18 @@ describe('Car physics — forward motion', () => {
     // Light brake.
     const w1 = makeWorldWithGround();
     const c1 = spawnCar(w1, new THREE.Vector3(0, 0, 1));
-    c1.applyInput({ steer: 0, brake: 0 });
+    c1.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(w1, c1, 120);
-    c1.applyInput({ steer: 0, brake: 0.2 });
+    c1.applyInput({ steer: 0, brake: 0.2, drift: false });
     stepN(w1, c1, 60);
     const lightSpeed = c1.body.linvel().z;
 
     // Hard brake.
     const w2 = makeWorldWithGround();
     const c2 = spawnCar(w2, new THREE.Vector3(0, 0, 1));
-    c2.applyInput({ steer: 0, brake: 0 });
+    c2.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(w2, c2, 120);
-    c2.applyInput({ steer: 0, brake: 1 });
+    c2.applyInput({ steer: 0, brake: 1, drift: false });
     stepN(w2, c2, 60);
     const hardSpeed = c2.body.linvel().z;
 
@@ -440,13 +441,13 @@ describe('Car physics — forward motion', () => {
     const car = spawnCar(world, new THREE.Vector3(0, 0, 1));
 
     // Get up to speed.
-    car.applyInput({ steer: 0, brake: 0 });
+    car.applyInput({ steer: 0, brake: 0, drift: false });
     stepN(world, car, 120);
     const vBefore = car.body.linvel().z;
     expect(vBefore).toBeGreaterThan(5);
 
     // Apply brake. The car should decelerate, not immediately reverse.
-    car.applyInput({ steer: 0, brake: 1 });
+    car.applyInput({ steer: 0, brake: 1, drift: false });
     // After 0.25s of braking, still moving forward (not yet reversing).
     stepN(world, car, 15);
     const vMid = car.body.linvel().z;

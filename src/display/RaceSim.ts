@@ -168,7 +168,7 @@ export class RaceSim {
       // Clear any input set during the countdown freeze. Without this, a
       // human car whose phone hasn't sent an INPUT yet stays braked at 100%
       // forever — auto-throttle never engages because brake > 0.
-      car.applyInput({ steer: 0, brake: 0 });
+      car.applyInput({ steer: 0, brake: 0, drift: false });
     }
   }
 
@@ -244,6 +244,12 @@ export class RaceSim {
     }
     // 3. Step Rapier
     this.world.step(this.eventQueue);
+
+    // 3a. Post-step drift speed preservation (must run after world.step).
+    for (const car of this.cars) car.postStep();
+
+    // 3b. Out-of-bounds recovery — respawn at nearest centerline waypoint
+    if (this.raceStarted) this.checkOutOfBounds();
 
     // 4. Process collision events for checkpoint sensors
     if (this.raceStarted) {
@@ -331,6 +337,41 @@ export class RaceSim {
       }
     }
     this.emitRaceFinished();
+  }
+
+  // If a car falls below the world or strays too far from the track
+  // centerline, teleport it back to the nearest waypoint. The road is 24 m
+  // wide; anything beyond ~40 m from centerline is clearly off-track.
+  private static readonly OOB_DIST_SQ = 40 * 40;
+  private static readonly OOB_MIN_Y = -5;
+
+  private checkOutOfBounds(): void {
+    for (const car of this.cars) {
+      if (car.finished) continue;
+      const t = car.body.translation();
+      const belowWorld = t.y < RaceSim.OOB_MIN_Y;
+
+      let tooFar = false;
+      if (!belowWorld) {
+        const pos = new THREE.Vector3(t.x, t.y, t.z);
+        const wpIdx = this.track.closestWaypointIndex(pos);
+        const wp = this.track.centerline[wpIdx];
+        const dx = t.x - wp.x;
+        const dz = t.z - wp.z;
+        tooFar = dx * dx + dz * dz > RaceSim.OOB_DIST_SQ;
+      }
+
+      if (belowWorld || tooFar) {
+        const pos = new THREE.Vector3(t.x, t.y, t.z);
+        const wpIdx = this.track.closestWaypointIndex(pos);
+        const wp = this.track.centerline[wpIdx];
+        const nextWp = this.track.centerline[(wpIdx + 1) % this.track.centerline.length];
+        const fwd = nextWp.clone().sub(wp);
+        fwd.y = 0;
+        fwd.normalize();
+        car.respawnAt(wp, fwd);
+      }
+    }
   }
 
   private emitRaceFinished(): void {

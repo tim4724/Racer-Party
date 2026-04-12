@@ -42,7 +42,9 @@ export class KeyboardDebug {
     if (this.brakeLevel < target) this.brakeLevel = Math.min(target, this.brakeLevel + step);
     else if (this.brakeLevel > target) this.brakeLevel = Math.max(target, this.brakeLevel - step);
 
-    this.car.applyInput({ steer, brake: this.brakeLevel });
+    const drift = this.keys.has('shift');
+    if (drift && steer !== 0) console.log('[kbd-drift] active, steer=', steer);
+    this.car.applyInput({ steer, brake: this.brakeLevel, drift });
   }
 
   dispose(): void {

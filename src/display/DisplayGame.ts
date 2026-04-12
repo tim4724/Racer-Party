@@ -19,6 +19,7 @@ import { SplitScreen } from './SplitScreen';
 import { KeyboardDebug } from './KeyboardDebug';
 import { Hud } from './Hud';
 import { Audio } from './Audio';
+import { driftTuning } from './Car';
 
 // Note: #results-screen is intentionally NOT in this list — it's an overlay
 // that sits over the game screen and is toggled directly via the .hidden class.
@@ -71,6 +72,8 @@ export class DisplayGame {
       },
       onRelayLost: (attempt, max, exhausted) => this.onRelayLost(attempt, max, exhausted),
       onRelayRestored: () => this.onRelayRestored(),
+      onPlayerAlive: (clientId) => this.onPlayerAlive(clientId),
+      onPlayerDead: (clientId) => this.onPlayerDead(clientId),
       isAcceptingPlayers: () => this.roomState === ROOM_STATE.LOBBY,
       getRoomState: () => this.roomState,
     });
@@ -356,13 +359,24 @@ export class DisplayGame {
       btn?.classList.remove('hidden');
     } else {
       if (heading) heading.textContent = 'RECONNECTING';
-      if (status) status.textContent = `Attempt ${Math.min(attempt, max)}/${max}…`;
+      if (status) status.textContent = max > 0 ? `Attempt ${Math.min(attempt, max)}/${max}…` : 'Connection lost…';
       btn?.classList.add('hidden');
     }
   }
 
   private onRelayRestored(): void {
     document.getElementById('display-reconnect-overlay')?.classList.add('hidden');
+  }
+
+  private onPlayerAlive(clientId: string): void {
+    const player = this.state.players.get(clientId);
+    if (player && this.hud) this.hud.setDisconnected(player.carId, false);
+  }
+
+  private onPlayerDead(clientId: string): void {
+    if (this.roomState !== ROOM_STATE.RACING && this.roomState !== ROOM_STATE.COUNTDOWN) return;
+    const player = this.state.players.get(clientId);
+    if (player && this.hud) this.hud.setDisconnected(player.carId, true, clientId);
   }
 
   resetToWelcome(): void {
@@ -427,9 +441,11 @@ export class DisplayGame {
       const target = this.sim.takeOverAiCar(0);
       if (target) this.keyboard = new KeyboardDebug(target);
     }
+    if (this.debug) this.createDriftSliders();
 
     this.splitScreen = new SplitScreen(canvas, hudLayer, this.sim.renderer, this.sim.cars.filter((c) => !c.isAI));
     this.hud = new Hud(hudLayer, this.splitScreen);
+    if (this.state.joinUrl) this.hud.setJoinUrl(this.state.joinUrl);
     this.splitScreen.recalcLayout();
 
     // Start render loop.
@@ -443,6 +459,57 @@ export class DisplayGame {
         this.audio.setCarSpeed(car.carId, car.speed, audible);
       }
     });
+  }
+
+  private createDriftSliders(): void {
+    // Remove existing panel if present (play-again).
+    document.getElementById('drift-debug')?.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'drift-debug';
+    Object.assign(panel.style, {
+      position: 'fixed', top: '12px', left: '12px', zIndex: '99999',
+      background: 'rgba(0,0,0,0.85)', color: '#fff', padding: '12px 16px',
+      borderRadius: '8px', fontFamily: 'monospace', fontSize: '14px',
+      display: 'flex', flexDirection: 'column', gap: '8px',
+      border: '2px solid #ff0', pointerEvents: 'auto',
+    } as CSSStyleDeclaration);
+
+    const makeSlider = (label: string, key: keyof typeof driftTuning, min: number, max: number, step: number) => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '8px';
+
+      const lbl = document.createElement('span');
+      lbl.style.width = '100px';
+      lbl.textContent = label;
+
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String(step);
+      input.value = String(driftTuning[key]);
+      input.style.width = '120px';
+
+      const val = document.createElement('span');
+      val.style.width = '40px';
+      val.textContent = String(driftTuning[key]);
+
+      input.addEventListener('input', () => {
+        driftTuning[key] = parseFloat(input.value);
+        val.textContent = input.value;
+      });
+
+      row.append(lbl, input, val);
+      return row;
+    };
+
+    panel.appendChild(makeSlider('extraRadius', 'extraRadius', 30, 200, 5));
+    // Append to game-screen so it survives screen transitions.
+    const target = document.getElementById('game-screen') || document.body;
+    target.appendChild(panel);
   }
 
   private async runCountdown(): Promise<void> {

@@ -27,6 +27,12 @@ export const BRAKE_DEAD_ZONE = 50;  // brake dead zone (more deliberate)
 // width on small screens, but never more than this — a thumb's reach is
 // what matters, not the screen size. See `effectiveMaxDrag`.
 export const MAX_DRAG = 120;
+// Drift activates when drag exceeds maxDrag by this many pixels.
+export const DRIFT_THRESHOLD = 25;
+// Steer magnitude below which drift auto-cancels (matches Car.ts hysteresis).
+const DRIFT_EXIT_STEER = 0.08;
+const DRIFT_VIBRATE_INTERVAL = 80;  // ms between vibration pulses
+const DRIFT_VIBRATE_PATTERN: number[] = [50, 30];
 
 export type GestureMode = 'idle' | 'steer' | 'brake';
 
@@ -57,7 +63,7 @@ export function dragToInput(
   mode: GestureMode,
   maxDrag: number = MAX_DRAG,
 ): InputState {
-  if (mode === 'idle') return { steer: 0, brake: 0 };
+  if (mode === 'idle') return { steer: 0, brake: 0, drift: false };
 
   const absX = Math.abs(dx);
 
@@ -66,7 +72,7 @@ export function dragToInput(
     const mag = absX <= DEAD_ZONE
       ? 0
       : clamp((absX - DEAD_ZONE) / Math.max(1, maxDrag - DEAD_ZONE), 0, 1);
-    return { steer: sign * mag, brake: 0 };
+    return { steer: sign * mag, brake: 0, drift: false };
   }
 
   // mode === 'brake': both axes active so the player can reverse + steer.
@@ -79,7 +85,7 @@ export function dragToInput(
   if (dy > BRAKE_DEAD_ZONE) {
     brake = clamp((dy - BRAKE_DEAD_ZONE) / Math.max(1, maxDrag - BRAKE_DEAD_ZONE), 0, 1);
   }
-  return { steer, brake };
+  return { steer, brake, drift: false };
 }
 
 export interface TouchInputCallbacks {
@@ -97,8 +103,10 @@ export class TouchInput {
   private maxDrag: number = MAX_DRAG;
   // Per-gesture mode lock — see the file header comment.
   private mode: GestureMode = 'idle';
-  lastEmitted: InputState = { steer: 0, brake: 0 };
+  lastEmitted: InputState = { steer: 0, brake: 0, drift: false };
   hapticArmed = true;
+  private drifting = false;
+  private driftVibrationTimer: ReturnType<typeof setInterval> | null = null;
 
   // Drag-debug overlay (optional). Anchored to the touchdown point and
   // updated on every move so the player can see their dead zones + range.
@@ -138,8 +146,10 @@ export class TouchInput {
     this.maxDrag = effectiveMaxDrag(this.el.clientWidth);
     this.mode = 'idle';
     this.hapticArmed = true;
+    this.stopDriftVibration();
+    this.drifting = false;
     this.showDebugAtAnchor(e.clientX, e.clientY);
-    this.emit({ steer: 0, brake: 0 });
+    this.emit({ steer: 0, brake: 0, drift: false });
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -148,6 +158,19 @@ export class TouchInput {
     const dy = e.clientY - this.anchorY;
     this.mode = detectMode(this.mode, dx, dy);
     const input = dragToInput(dx, dy, this.mode, this.maxDrag);
+
+    // Drift detection: activate when dragging past maxDrag in steer mode.
+    if (this.mode === 'steer' && !this.drifting && Math.abs(dx) > this.maxDrag + DRIFT_THRESHOLD) {
+      this.drifting = true;
+      this.startDriftVibration();
+    }
+    // Exit drift when steer returns near center.
+    if (this.drifting && Math.abs(input.steer) < DRIFT_EXIT_STEER) {
+      this.drifting = false;
+      this.stopDriftVibration();
+    }
+    input.drift = this.drifting;
+
     if (input.brake > 0.1 && this.hapticArmed) {
       this.haptic(15);
       this.hapticArmed = false;
@@ -162,9 +185,11 @@ export class TouchInput {
     if (e.pointerId !== this.activePointerId) return;
     this.activePointerId = null;
     this.mode = 'idle';
+    this.drifting = false;
+    this.stopDriftVibration();
     try { this.el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
     this.hideDebug();
-    this.emit({ steer: 0, brake: 0 });
+    this.emit({ steer: 0, brake: 0, drift: false });
   }
 
   // ---- Debug overlay ----
@@ -227,7 +252,8 @@ export class TouchInput {
     // Emit only on meaningful changes — caller throttles further on the wire.
     if (
       Math.abs(input.steer - this.lastEmitted.steer) < 0.005 &&
-      Math.abs(input.brake - this.lastEmitted.brake) < 0.005
+      Math.abs(input.brake - this.lastEmitted.brake) < 0.005 &&
+      input.drift === this.lastEmitted.drift
     ) {
       return;
     }
@@ -239,7 +265,24 @@ export class TouchInput {
     if (navigator.vibrate) navigator.vibrate(pattern);
   }
 
+  private startDriftVibration(): void {
+    this.stopDriftVibration();
+    this.haptic(DRIFT_VIBRATE_PATTERN);
+    this.driftVibrationTimer = setInterval(() => {
+      this.haptic(DRIFT_VIBRATE_PATTERN);
+    }, DRIFT_VIBRATE_INTERVAL);
+  }
+
+  private stopDriftVibration(): void {
+    if (this.driftVibrationTimer !== null) {
+      clearInterval(this.driftVibrationTimer);
+      this.driftVibrationTimer = null;
+    }
+    if (navigator.vibrate) navigator.vibrate(0);
+  }
+
   dispose(): void {
+    this.stopDriftVibration();
     this.el.removeEventListener('pointerdown', this.boundDown);
     this.el.removeEventListener('pointermove', this.boundMove);
     this.el.removeEventListener('pointerup', this.boundUp);
