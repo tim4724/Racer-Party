@@ -1,0 +1,26 @@
+{
+  "name": "racer",
+  "version": "0.1.0",
+  "description": "3D couch party racer with phone controllers",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run server/index.ts",
+    "build": "vite build",
+    "start": "NODE_ENV=production bun run server/index.ts",
+    "test": "bun test tests/*.test.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "three": "^0.160.0",
+    "@dimforge/rapier3d-compat": "^0.14.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "@types/three": "^0.160.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/bun": "^1.1.0",
+    "@playwright/test": "^1.58.2"
+  }
+}
