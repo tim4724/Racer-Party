@@ -335,10 +335,13 @@ export class DisplayGame {
   // Skip the lobby and immediately start a new race with the same players.
   playAgain(): void {
     if (this.roomState !== ROOM_STATE.FINISHED) return;
-    if (this.state.playerOrder.length === 0 && !this.debug) return;
     document.getElementById('results-screen')?.classList.add('hidden');
     this.teardownSim();
     this.roomState = ROOM_STATE.LOBBY;
+    // Absorb late joiners and drop disconnected racers so the next race
+    // includes everyone who's currently connected.
+    this.connection.absorbLateJoiners();
+    if (this.state.playerOrder.length === 0 && !this.debug) return;
     void this.startRace();
   }
 
@@ -582,6 +585,10 @@ export class DisplayGame {
     document.getElementById('results-screen')?.classList.add('hidden');
     this.teardownSim();
     this.roomState = ROOM_STATE.LOBBY;
+    // Absorb late joiners and drop disconnected racers before rebuilding
+    // the lobby. Must happen after roomState is LOBBY so isAcceptingPlayers
+    // returns true for any new peer_joined events during the transition.
+    this.connection.absorbLateJoiners();
     // Broadcast a fresh lobby snapshot so controllers re-render their list
     // and bounce out of the game/finished screens.
     this.connection.broadcastReturnToLobby();

@@ -26,8 +26,20 @@ if (!roomCode) {
     if (!('ontouchstart' in window)) nameInput.focus();
   }
 
+  // Check for a prior session BEFORE constructing ControllerGame — its
+  // constructor writes a fresh clientId to sessionStorage, so reading
+  // after would always be truthy.
+  const rejoinParam = new URLSearchParams(location.search).get('rejoin');
+  let hadStoredId = false;
+  try { hadStoredId = !!sessionStorage.getItem('racer_client_' + roomCode); } catch { /* ignore */ }
+
   // Construct the game — it binds handlers to form submit / buttons.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const game = new ControllerGame(roomCode);
-  void game;
+
+  // Auto-connect (skip name screen) when we have a prior session for this
+  // room — either via ?rejoin= URL param or a stored sessionStorage clientId.
+  // This handles both QR-scan rejoin AND browser tab eviction/reload.
+  if (rejoinParam || hadStoredId) {
+    game.join(stored);
+  }
 }

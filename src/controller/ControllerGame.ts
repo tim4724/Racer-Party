@@ -39,7 +39,7 @@ export class ControllerGame {
     this.roomCode = roomCode;
     this.connection = new ControllerConnection({
       roomCode,
-      onWelcome: (carId, color, name, roomState) => this.onWelcome(carId, color, name, roomState),
+      onWelcome: (carId, color, name, roomState, inGame) => this.onWelcome(carId, color, name, roomState, inGame),
       onLobbyUpdate: (players) => this.onLobbyUpdate(players),
       onReturnToLobby: () => this.onReturnToLobby(),
       onCountdown: (value) => this.onCountdown(value),
@@ -103,6 +103,14 @@ export class ControllerGame {
     this.carId = null;
     this.color = null;
     this.playerCount = 0;
+    // Remove ?rejoin= from the URL so a stale rejoin param doesn't
+    // auto-connect on the next page load.
+    const params = new URLSearchParams(location.search);
+    if (params.has('rejoin')) {
+      params.delete('rejoin');
+      const qs = params.toString();
+      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+    }
     document.getElementById('pause-overlay')?.classList.add('hidden');
     document.getElementById('reconnect-overlay')?.classList.add('hidden');
     document.getElementById('room-gone-message')?.classList.add('hidden');
@@ -262,7 +270,7 @@ export class ControllerGame {
   // Message handlers
   // -------------------------------------------------------------------------
 
-  private onWelcome(carId: number, color: string, name: string, roomState: string): void {
+  private onWelcome(carId: number, color: string, name: string, roomState: string, inGame: boolean): void {
     this.carId = carId;
     this.color = color;
     this.playerName = name || this.playerName;
@@ -278,8 +286,15 @@ export class ControllerGame {
     const gameName = document.getElementById('hud-name');
     if (gameName) gameName.style.setProperty('--player-color', color);
 
-    // If we joined mid-race, sit in the lobby with a "Game in progress"
-    // message until the display returns to its lobby for the next race.
+    // `inGame` is present only for players who are part of the active race
+    // (mirrors Tetris's `alive` field). If present → rejoin immediately.
+    // If absent during a race → late joiner, show "Game in progress".
+    if (inGame) {
+      this.waitingForNextGame = false;
+      this.showGameScreen();
+      return;
+    }
+
     this.waitingForNextGame = roomState !== 'lobby';
 
     if (this.currentScreen === 'name-screen') this.showScreen('lobby-screen');
@@ -465,7 +480,7 @@ export class ControllerGame {
       rejoin?.classList.remove('hidden');
     } else {
       if (heading) heading.textContent = 'RECONNECTING';
-      if (status) status.textContent = `Attempt ${Math.min(attempt, max)}/${max}…`;
+      if (status) status.textContent = max > 0 ? `Attempt ${Math.min(attempt, max)}/${max}…` : 'Connection lost…';
       rejoin?.classList.add('hidden');
     }
   }
