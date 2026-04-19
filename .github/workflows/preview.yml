@@ -50,12 +50,10 @@ jobs:
           set -euo pipefail
           SAFE_BRANCH=$(echo "$BRANCH_RAW" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9-]#-#g' | cut -c1-50 | sed 's/-*$//')
           NS="racer-${SAFE_BRANCH}"
-
-          if [ "$BRANCH_RAW" = "main" ]; then
-            HOST="racer.couch-games.com"
-          else
-            HOST="preview-${SAFE_BRANCH}.racer.couch-games.com"
-          fi
+          # All preview hosts sit under *.couch-games.com (covered by the
+          # existing wildcard TLS + DNS). racer.couch-games.com is reserved
+          # for the eventual production deploy.
+          HOST="racer-${SAFE_BRANCH}.couch-games.com"
 
           kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS"
 
@@ -122,15 +120,15 @@ jobs:
               - protocol: TCP
           NETPOL
 
-          # Copy the wildcard TLS secret into the preview namespace.
-          TLS_CRT=$(kubectl get secret racer-wildcard-tls -n default -o jsonpath='{.data.tls\.crt}')
-          TLS_KEY=$(kubectl get secret racer-wildcard-tls -n default -o jsonpath='{.data.tls\.key}')
+          # Copy the *.couch-games.com wildcard TLS into the preview namespace.
+          TLS_CRT=$(kubectl get secret couch-games-wildcard-tls -n default -o jsonpath='{.data.tls\.crt}')
+          TLS_KEY=$(kubectl get secret couch-games-wildcard-tls -n default -o jsonpath='{.data.tls\.key}')
 
           cat <<EOS | kubectl apply -n "$NS" -f -
           apiVersion: v1
           kind: Secret
           metadata:
-            name: racer-wildcard-tls
+            name: couch-games-wildcard-tls
           type: kubernetes.io/tls
           data:
             tls.crt: ${TLS_CRT}
@@ -201,7 +199,7 @@ jobs:
                   - name: racer
                     port: 4000
             tls:
-              secretName: racer-wildcard-tls
+              secretName: couch-games-wildcard-tls
           ---
           apiVersion: traefik.io/v1alpha1
           kind: IngressRoute
@@ -225,11 +223,7 @@ jobs:
           BRANCH_RAW: ${{ github.ref_name }}
         run: |
           SAFE_BRANCH=$(echo "$BRANCH_RAW" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9-]#-#g' | cut -c1-50 | sed 's/-*$//')
-          if [ "$BRANCH_RAW" = "main" ]; then
-            HOST="racer.couch-games.com"
-          else
-            HOST="preview-${SAFE_BRANCH}.racer.couch-games.com"
-          fi
+          HOST="racer-${SAFE_BRANCH}.couch-games.com"
           {
             echo "### Preview"
             echo "- URL: https://${HOST}"
