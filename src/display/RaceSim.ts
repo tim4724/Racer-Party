@@ -168,7 +168,7 @@ export class RaceSim {
       // Clear any input set during the countdown freeze. Without this, a
       // human car whose phone hasn't sent an INPUT yet stays braked at 100%
       // forever — auto-throttle never engages because brake > 0.
-      car.applyInput({ steer: 0, brake: 0, drift: false });
+      car.applyInput({ steer: 0, brake: 0 });
     }
   }
 

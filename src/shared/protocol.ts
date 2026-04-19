@@ -5,7 +5,7 @@ export const RELAY_URL = 'wss://ws.couch-games.com';
 export const MSG = {
   // Controller → Display
   HELLO: 'hello',           // { name }
-  INPUT: 'input',           // { steer: -1..1, brake: 0..1, drift: bool }
+  INPUT: 'input',           // { steer: -1..1, brake: 0..1 }
   START_RACE: 'start_race', // any player can request — display gates
   PAUSE_GAME: 'pause_game',
   RESUME_GAME: 'resume_game',
@@ -40,11 +40,11 @@ export const ROOM_STATE = {
 
 export type RoomState = (typeof ROOM_STATE)[keyof typeof ROOM_STATE];
 
-// Continuous input — controller streams to display.
+// Continuous input — controller streams to display. Drift is derived on the
+// display from steer + brake + speed, so we don't carry it on the wire.
 export interface InputState {
   steer: number;  // -1..1
   brake: number;  // 0..1
-  drift: boolean; // true while drifting
 }
 
 // Per-player welcome payload.

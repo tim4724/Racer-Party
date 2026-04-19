@@ -67,6 +67,15 @@ const FLIP_RECOVERY_TIME = 1.5;
 
 // --- Drift (pure cheat) -----------------------------------------------------
 const DRIFT_RAMP_SPEED = 6.67;        // blend 0→1 in ~0.15s
+// Drift activation — display-authoritative.
+//   - Firm steer input (past the dead zone / detent) in either direction
+//   - Brake held (binary in today's controller, but we check > 0.5 in case)
+//   - Moving fast enough to actually drift, not spin from a standstill
+// Once a drift is in progress (blend > 0) the speed gate lifts so losing
+// speed mid-drift doesn't kill it — only releasing the inputs does.
+const DRIFT_STEER_MIN = 0.25;
+const DRIFT_BRAKE_MIN = 0.5;
+const DRIFT_MIN_SPEED = 100 / 3.6;    // 100 km/h ≈ 27.78 m/s
 // Tunable at runtime via driftTuning (debug sliders).
 export const driftTuning = {
   extraRadius: 130,    // extra turn radius in meters at full steer
@@ -126,9 +135,11 @@ export class Car {
   wheelMeshes: THREE.Mesh[] = [];
 
   // Latest input from phone/AI/keyboard
-  input: InputState = { steer: 0, brake: 0, drift: false };
+  input: InputState = { steer: 0, brake: 0 };
   // 0 = normal grip, 1 = full drift. Ramps in, snaps out.
   private driftBlend = 0;
+  // Read-only view for the HUD.
+  get isDrifting(): boolean { return this.driftBlend > 0; }
   // Speed captured when drift activates — preserved throughout the drift.
   private driftSpeed = 0;
 
@@ -306,9 +317,18 @@ export class Car {
       return;
     }
 
-    // 0. Drift blend: ramp in, snap out.
-    const wasDrifting = this.driftBlend > 0;
-    if (this.input.drift) {
+    // 0. Drift blend: ramp in, snap out. Derived purely from physics state
+    //    + raw inputs; a low-speed crawl can't accidentally spin the car out.
+    const vel0 = this.body.linvel();
+    const speed0 = Math.hypot(vel0.x, vel0.z);
+    const driftActive = this.driftBlend > 0;
+    const steerHeld = Math.abs(this.input.steer) > DRIFT_STEER_MIN;
+    const brakeHeld = this.input.brake > DRIFT_BRAKE_MIN;
+    const fastEnough = driftActive || speed0 >= DRIFT_MIN_SPEED;
+    const wantDrift = steerHeld && brakeHeld && fastEnough;
+
+    const wasDrifting = driftActive;
+    if (wantDrift) {
       this.driftBlend = Math.min(1, this.driftBlend + DRIFT_RAMP_SPEED * dt);
     } else {
       this.driftBlend = 0;
@@ -316,8 +336,7 @@ export class Car {
 
     // Capture speed when drift starts.
     if (this.driftBlend > 0 && !wasDrifting) {
-      const vel = this.body.linvel();
-      this.driftSpeed = Math.hypot(vel.x, vel.z);
+      this.driftSpeed = speed0;
     }
 
     // 1. Front-wheel steering — normal, unmodified.

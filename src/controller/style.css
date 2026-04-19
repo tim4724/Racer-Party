@@ -241,7 +241,11 @@ input[type="text"]:focus {
   top: env(safe-area-inset-top, 12px);
   left: 0;
   right: 0;
-  padding: 12px 16px;
+  padding:
+    12px
+    calc(env(safe-area-inset-right, 0px) + 16px)
+    12px
+    calc(env(safe-area-inset-left, 0px) + 16px);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -249,37 +253,6 @@ input[type="text"]:focus {
 }
 
 #lobby-top-bar .icon-btn { pointer-events: auto; }
-
-.player-identity {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 20px 24px;
-  background: var(--bg-card);
-  border: 2px solid var(--player-color);
-  border-radius: 16px;
-  box-shadow: 0 0 24px rgba(var(--accent-rgb), 0.12);
-}
-
-.identity-dot {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--player-color);
-  box-shadow: 0 0 12px var(--player-color);
-}
-
-#player-identity-name {
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 16ch;
-}
 
 /* ============================================
    Icon buttons
@@ -341,7 +314,11 @@ input[type="text"]:focus {
   top: env(safe-area-inset-top, 12px);
   left: 0;
   right: 0;
-  padding: 12px 16px;
+  padding:
+    12px
+    calc(env(safe-area-inset-right, 0px) + 16px)
+    12px
+    calc(env(safe-area-inset-left, 0px) + 16px);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -374,16 +351,25 @@ input[type="text"]:focus {
   touch-action: none;
   overflow: hidden;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  /* Top padding clears the absolute-positioned top-bar + sensitivity row.
+     All edges respect the device safe area. */
+  padding:
+    calc(env(safe-area-inset-top, 4px) + 76px)
+    calc(env(safe-area-inset-right, 0px) + 16px)
+    calc(env(safe-area-inset-bottom, 0px) + 10px)
+    calc(env(safe-area-inset-left, 0px) + 16px);
 }
 
 #touch-pad {
   position: relative;
+  /* Portrait default: pad takes 75% of available height via flex ratio. */
+  flex: 3 1 0;
   width: min(86vw, 480px);
-  /* Sit between the gesture hints (~ top 220px) and the bottom HUD */
-  height: min(58vh, 520px);
-  margin-top: 200px;
+  height: auto;
+  margin: 0 auto;
   border-radius: 28px;
   border: 2px dashed rgba(var(--accent-rgb), 0.55);
   background:
@@ -421,6 +407,253 @@ input[type="text"]:focus {
 }
 
 /* ============================================
+   Dedicated BRAKE button (below the touchpad)
+   ============================================ */
+#brake-btn {
+  /* Portrait default: brake takes 25% of available height, capped by the
+     flex ratio. min-height keeps it tappable on small / short phones. */
+  flex: 1 1 0;
+  min-height: 96px;
+  width: min(86vw, 480px);
+  margin: 0 auto;
+  border: 2px solid rgba(239, 100, 97, 0.65);
+  border-radius: 24px;
+  background:
+    radial-gradient(ellipse at center, rgba(239, 100, 97, 0.16) 0%, transparent 70%),
+    rgba(40, 18, 22, 0.55);
+  color: rgba(239, 100, 97, 0.9);
+  font-family: inherit;
+  font-size: clamp(22px, 5vw, 32px);
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 0 32px rgba(239, 100, 97, 0.12);
+  touch-action: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  transition: background 60ms linear, transform 60ms ease-out;
+}
+#brake-btn.active {
+  background:
+    radial-gradient(ellipse at center, rgba(239, 100, 97, 0.5) 0%, rgba(239, 100, 97, 0.25) 70%),
+    rgba(80, 24, 30, 0.8);
+  color: #fff;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 0 48px rgba(239, 100, 97, 0.4);
+  transform: scale(0.98);
+}
+
+/* ============================================
+   Gyro mode overrides — hide the touch-pad and let the BRAKE button
+   fill the whole control surface. The gyro V-indicator overlays it.
+   ============================================ */
+#game-screen[data-input="gyro"] #touch-pad {
+  display: none;
+}
+#game-screen[data-input="gyro"] #brake-btn {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  aspect-ratio: unset;
+  /* Push the BRAKE word to the bottom edge so it doesn't collide with
+     the centered V-indicator. */
+  align-self: stretch;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: clamp(12px, 4vh, 24px);
+}
+
+/* ============================================
+   Landscape layout — game screen only
+   Phone is wider than tall: put touchpad on the left, button on the right
+   and shrink the top chrome.
+   ============================================ */
+@media (orientation: landscape) {
+  #sensitivity-row {
+    top: calc(env(safe-area-inset-top, 4px) + 6px);
+    left: calc(env(safe-area-inset-left, 0px) + 10px);
+    right: calc(env(safe-area-inset-right, 0px) + 10px);
+    padding: 5px 10px;
+    gap: 8px;
+  }
+  .sens-label { font-size: 10px; letter-spacing: 0.14em; }
+  .sens-value { min-width: 48px; font-size: 12px; }
+
+  #game-top-bar {
+    padding:
+      6px
+      calc(env(safe-area-inset-right, 0px) + 10px)
+      6px
+      calc(env(safe-area-inset-left, 0px) + 10px);
+  }
+  .game-name { font-size: 13px; padding: 5px 10px; }
+
+  /* Stack touchpad and brake side-by-side, 50/50. Touch B swaps the
+     order via flex-direction: row-reverse. Generous horizontal padding
+     so palms holding the phone in a two-handed grip don't trigger the
+     brake button at the edges. Safe-area insets are added on top. */
+  #touch-surface {
+    flex-direction: row;
+    gap: 12px;
+    padding:
+      calc(env(safe-area-inset-top, 4px) + 62px)
+      calc(env(safe-area-inset-right, 0px) + 28px)
+      calc(env(safe-area-inset-bottom, 0px) + 10px)
+      calc(env(safe-area-inset-left, 0px) + 28px);
+    justify-content: center;
+    align-items: stretch;
+  }
+  #game-screen[data-input="touch_b"] #touch-surface {
+    flex-direction: row-reverse;
+  }
+
+  #touch-pad {
+    flex: 1 1 0;
+    width: auto;
+    max-width: none;
+    height: auto;
+    margin: 0;
+  }
+
+  #brake-btn {
+    flex: 1 1 0;
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    height: auto;
+    font-size: clamp(16px, 3vw, 26px);
+    letter-spacing: 0.18em;
+  }
+
+  /* Size the tilt indicator to fit whatever pad dimensions we end up with. */
+  .gyro-indicator {
+    width: min(55%, 55vh, 280px);
+  }
+
+  /* Hide the corner 'TOUCHPAD' label in landscape — it collides visually
+     with the sensitivity row above the pad. */
+  #touch-pad-label { display: none; }
+}
+
+/* ============================================
+   Segmented radio pickers
+   ============================================ */
+.picker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: min(86vw, 360px);
+}
+/* Inline variant used inside the game-screen sensitivity row — no label,
+   compact padding, shrinks to content. */
+.picker.picker--inline {
+  width: auto;
+  flex-direction: row;
+  gap: 0;
+}
+.picker.picker--inline .picker-opt {
+  padding: 6px 10px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+/* Touch B only makes sense in landscape — hide the option in portrait. */
+@media (orientation: portrait) {
+  .picker-opt--landscape-only { display: none; }
+}
+.picker-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--fg-dim);
+}
+.picker-options {
+  display: flex;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(20, 26, 46, 0.5);
+  overflow: hidden;
+}
+.picker-opt {
+  flex: 1;
+  padding: 8px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 80ms linear, color 80ms linear;
+}
+.picker-opt + .picker-opt { border-left: 1px solid var(--border); }
+.picker-opt.selected {
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.35) 0%, rgba(var(--accent-rgb), 0.15) 100%);
+  color: var(--fg);
+}
+#gyro-status:not(.hidden) {
+  color: rgba(var(--accent-rgb), 0.9);
+  font-size: 13px;
+  text-align: center;
+  max-width: min(86vw, 360px);
+}
+
+/* ============================================
+   Gyro tilt indicator — V-shape with live needle
+   Positioned absolutely inside #touch-surface; it overlays whichever
+   surface is active (touch-pad in touchpad mode, full-width brake in
+   gyro mode). `pointer-events: none` so taps pass through.
+   ============================================ */
+.gyro-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(50vmin, 260px);
+  height: auto;
+  aspect-ratio: 1 / 1;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 3;
+}
+.gyro-indicator.hidden { display: none; }
+.gyro-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 1.5;
+}
+.gyro-bound {
+  stroke: rgba(var(--accent-rgb), 0.6);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 6 6;
+}
+.gyro-needle {
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.6));
+  transition: transform 60ms linear;
+  transform-origin: 0 0;
+}
+.gyro-center {
+  fill: var(--accent);
+}
+.gyro-angle-label {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  fill: rgba(var(--accent-rgb), 0.85);
+  font-weight: 700;
+}
+
+/* ============================================
    Touch debug overlay (drag visualization)
    ============================================ */
 #touch-debug {
@@ -448,15 +681,12 @@ input[type="text"]:focus {
 }
 #touch-debug .td-tick--inner { stroke: rgba(255, 255, 255, 0.4); }
 #touch-debug .td-tick--max   { stroke: rgba(255, 209, 102, 0.7); stroke-width: 3; }
-#touch-debug .td-tick--brake { stroke: rgba(239, 100, 97, 0.55); }
-#touch-debug .td-tick--brake-max { stroke: rgba(239, 100, 97, 0.85); stroke-width: 3; }
 
 #touch-debug .td-label {
   fill: rgba(255, 255, 255, 0.55);
   font: 600 14px ui-monospace, monospace;
   letter-spacing: 0.08em;
 }
-#touch-debug .td-label--brake { fill: rgba(239, 100, 97, 0.75); }
 
 #touch-debug .td-center {
   fill: rgba(255, 255, 255, 0.85);
@@ -495,55 +725,108 @@ input[type="text"]:focus {
 }
 
 /* ============================================
-   Gesture hints (top of game screen, like Tetris)
+   Sensitivity slider (top of game screen)
    ============================================ */
-#gesture-hints {
+#sensitivity-row {
   position: absolute;
   top: calc(env(safe-area-inset-top, 12px) + 80px);
-  left: 0;
-  right: 0;
+  left: calc(env(safe-area-inset-left, 0px) + 16px);
+  right: calc(env(safe-area-inset-right, 0px) + 16px);
   display: flex;
-  justify-content: center;
-  gap: 12px;
-  padding: 0 16px;
-  pointer-events: none;
-  z-index: 4;
-}
-
-.hint-bar-item {
-  flex: 0 1 140px;
-  display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 10px 14px 9px;
+  gap: 12px;
+  padding: 10px 14px;
   background: rgba(0, 0, 0, 0.5);
   border: 1px solid var(--border);
   border-radius: 12px;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  color: var(--fg);
+  z-index: 4;
 }
-
-.hint-bar-item__icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 44px;
-}
-
-.hint-bar-item__icon svg {
-  display: block;
-  width: auto;
-  height: 36px;
-}
-
-.hint-bar-item__label {
-  font-size: 14px;
+.sens-label {
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--fg-dim);
+}
+#sensitivity-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: rgba(var(--accent-rgb), 0.2);
+  border-radius: 3px;
+  outline: none;
+  margin: 0;
+}
+#sensitivity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.5);
+  cursor: pointer;
+}
+#sensitivity-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  cursor: pointer;
+}
+.sens-value {
+  min-width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
   color: var(--fg);
+}
+
+/* Persistent touchpad range indicator — shows the distance from center
+   required for max steer at the current sensitivity. Hidden in gyro mode. */
+.range-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  height: 1px;
+  pointer-events: none;
+  opacity: 0.5;
+}
+.range-indicator.hidden { display: none; }
+.range-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.6);
+  transform: translate(-50%, -50%);
+}
+.range-tick {
+  position: absolute;
+  top: 50%;
+  width: 3px;
+  height: 36px;
+  background: rgba(var(--accent-rgb), 0.8);
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+}
+.range-tick::after {
+  content: attr(data-label);
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 700;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: rgba(var(--accent-rgb), 0.9);
+  white-space: nowrap;
 }
 
 /* ============================================

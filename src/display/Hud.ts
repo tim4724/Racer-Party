@@ -128,7 +128,7 @@ export class Hud {
       div.querySelector('.place')!.textContent = `P${place}/${sim.cars.length}`;
       div.querySelector('.speed')!.textContent = `${kmh} km/h`;
       const driftEl = div.querySelector('.drift') as HTMLElement | null;
-      if (driftEl) driftEl.style.display = car.input.drift ? 'block' : 'none';
+      if (driftEl) driftEl.style.display = car.isDrifting ? 'block' : 'none';
     }
   }
 }

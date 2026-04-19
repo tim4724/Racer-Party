@@ -44,7 +44,7 @@ export class ControllerConnection {
   private lastPongTime = 0;
   private pongTimedOut = false;
   private lastInputSent = 0;
-  private lastInputState: InputState = { steer: 0, brake: 0, drift: false };
+  private lastInputState: InputState = { steer: 0, brake: 0 };
   // gameCancelled is set when the display rejects this client (room full,
   // race in progress). It causes inbound game broadcasts to be ignored so
   // a kicked player doesn't get yanked back into a game by stale messages.
@@ -255,13 +255,12 @@ export class ControllerConnection {
     const now = performance.now();
     const changed =
       Math.abs(input.steer - this.lastInputState.steer) > 0.02 ||
-      Math.abs(input.brake - this.lastInputState.brake) > 0.02 ||
-      input.drift !== this.lastInputState.drift;
+      Math.abs(input.brake - this.lastInputState.brake) > 0.02;
     const overdue = now - this.lastInputSent > INPUT_KEEPALIVE_MS;
     if (!changed && !overdue) return;
-    this.lastInputState = { steer: input.steer, brake: input.brake, drift: input.drift };
+    this.lastInputState = { steer: input.steer, brake: input.brake };
     this.lastInputSent = now;
-    this.party.sendTo('display', { type: MSG.INPUT, steer: input.steer, brake: input.brake, drift: input.drift });
+    this.party.sendTo('display', { type: MSG.INPUT, steer: input.steer, brake: input.brake });
   }
 
   // ---- Ping / Pong ----

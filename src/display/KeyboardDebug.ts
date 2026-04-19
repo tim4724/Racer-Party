@@ -11,6 +11,7 @@
 // The brake input ramps from 0 → 1 over BRAKE_RAMP_TIME seconds while held,
 // and ramps back to 0 just as fast on release. Without this, S → instant
 // full brake feels jarring (matches how touch input has a natural drag ramp).
+// Drift is display-decided from steer + brake + speed; no keyboard override.
 
 import type { Car } from './Car';
 
@@ -42,9 +43,7 @@ export class KeyboardDebug {
     if (this.brakeLevel < target) this.brakeLevel = Math.min(target, this.brakeLevel + step);
     else if (this.brakeLevel > target) this.brakeLevel = Math.max(target, this.brakeLevel - step);
 
-    const drift = this.keys.has('shift');
-    if (drift && steer !== 0) console.log('[kbd-drift] active, steer=', steer);
-    this.car.applyInput({ steer, brake: this.brakeLevel, drift });
+    this.car.applyInput({ steer, brake: this.brakeLevel });
   }
 
   dispose(): void {

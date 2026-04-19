@@ -325,8 +325,7 @@ export class DisplayConnection {
       case MSG.INPUT: {
         const steer = clamp(Number(data.steer) || 0, -1, 1);
         const brake = clamp(Number(data.brake) || 0, 0, 1);
-        const drift = !!data.drift;
-        this.callbacks.onPlayerInput(from, { steer, brake, drift });
+        this.callbacks.onPlayerInput(from, { steer, brake });
         break;
       }
       case MSG.PING: {

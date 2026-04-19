@@ -57,14 +57,17 @@ function measureTurn(drift: boolean, steer: number, warmupFrames: number, steerF
   const car = spawnCar(world);
 
   // Warm up: drive straight to build speed.
-  car.applyInput({ steer: 0, brake: 0, drift: false });
+  car.applyInput({ steer: 0, brake: 0 });
   stepN(world, car, warmupFrames);
 
   const speedBefore = Math.hypot(car.body.linvel().x, car.body.linvel().z);
   const startPos = car.body.translation();
 
-  // Now steer (with or without drift).
-  car.applyInput({ steer, brake: 0, drift });
+  // Now steer. The `drift` flag used to be a controller hint but is now
+  // display-decided from brake + speed; this test exercises the pure
+  // steering response, with drift implicitly off since brake is 0.
+  void drift;
+  car.applyInput({ steer, brake: 0 });
   stepN(world, car, steerFrames);
 
   const endPos = car.body.translation();
@@ -142,13 +145,13 @@ describe('Drift tuning diagnostics', () => {
     const car = spawnCar(world);
 
     // Build speed.
-    car.applyInput({ steer: 0, brake: 0, drift: false });
+    car.applyInput({ steer: 0, brake: 0 });
     stepN(world, car, 120);
     const speedBefore = Math.hypot(car.body.linvel().x, car.body.linvel().z);
     console.log(`\n=== FRAME-BY-FRAME (speed at drift start: ${speedBefore.toFixed(1)} m/s) ===`);
 
     // Activate drift + steer.
-    car.applyInput({ steer: 1, brake: 0, drift: true });
+    car.applyInput({ steer: 1, brake: 0 });
     for (let i = 0; i < 60; i++) {
       car.step(1 / 60);
       world.step();
@@ -171,17 +174,17 @@ describe('Drift tuning diagnostics', () => {
     const world = makeWorldWithGround();
     const car = spawnCar(world);
 
-    car.applyInput({ steer: 0, brake: 0, drift: false });
+    car.applyInput({ steer: 0, brake: 0 });
     stepN(world, car, 120); // build speed
 
     // Drift for 1 second.
-    car.applyInput({ steer: 1, brake: 0, drift: true });
+    car.applyInput({ steer: 1, brake: 0 });
     stepN(world, car, 60);
     const headingDuringDrift = (Math.atan2(car.forward().x, car.forward().z) * 180) / Math.PI;
     const angVelDuringDrift = car.body.angvel().y;
 
     // Stop drifting, go straight.
-    car.applyInput({ steer: 0, brake: 0, drift: false });
+    car.applyInput({ steer: 0, brake: 0 });
     stepN(world, car, 60); // 1s recovery
     const headingAfterRecovery = (Math.atan2(car.forward().x, car.forward().z) * 180) / Math.PI;
     const angVelAfterRecovery = car.body.angvel().y;

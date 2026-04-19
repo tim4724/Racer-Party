@@ -34,7 +34,7 @@
       <button type="button" id="join-btn" class="btn btn-primary">JOIN</button>
     </div>
 
-    <!-- Lobby screen: wait for race start (any player can tap start) -->
+    <!-- Lobby screen: configure input, then wait for the display to start. -->
     <div id="lobby-screen" class="screen hidden">
       <div id="lobby-top-bar">
         <button id="lobby-back-btn" class="icon-btn" aria-label="Leave game">
@@ -50,12 +50,10 @@
         </button>
       </div>
       <h1 class="gradient-title">RACER</h1>
-      <div id="player-identity" class="player-identity">
-        <span class="identity-dot"></span>
-        <span id="player-identity-name">Player</span>
-      </div>
-      <p id="lobby-status" class="status">Waiting for the display…</p>
-      <button id="start-btn" class="btn btn-primary" disabled>WAITING…</button>
+      <p id="lobby-status" class="status">Tap START to begin.</p>
+      <p id="gyro-status" class="status status-detail hidden"></p>
+
+      <button id="start-btn" type="button" class="btn btn-primary">START</button>
       <p id="lobby-join-url" class="join-url-hint"></p>
       <div class="ping ping-bottom" id="ping-display">… ms</div>
     </div>
@@ -76,57 +74,61 @@
           </button>
         </div>
       </div>
-      <div id="gesture-hints">
-        <div class="hint-bar-item">
-          <div class="hint-bar-item__icon">
-            <svg width="96" height="56" viewBox="0 0 96 56" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M18 10L6 28L18 46" opacity="0.55" />
-              <path d="M78 10L90 28L78 46" opacity="0.55" />
-              <line x1="12" y1="28" x2="84" y2="28" opacity="0.3" />
-              <circle cx="48" cy="28" r="8" fill="currentColor" stroke="none" opacity="0.85" />
-            </svg>
+      <div id="sensitivity-row">
+        <div class="picker picker--inline" data-picker="input-mode" role="radiogroup" aria-label="Steering mode">
+          <div class="picker-options">
+            <button type="button" class="picker-opt" data-value="touch_a">Touch A</button>
+            <button type="button" class="picker-opt picker-opt--landscape-only" data-value="touch_b">Touch B</button>
+            <button type="button" class="picker-opt" data-value="gyro">Gyro</button>
           </div>
-          <div class="hint-bar-item__label">Steer</div>
         </div>
-        <div class="hint-bar-item">
-          <div class="hint-bar-item__icon">
-            <svg width="56" height="72" viewBox="0 0 56 72" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="28" cy="14" r="8" fill="currentColor" stroke="none" opacity="0.85" />
-              <line x1="28" y1="22" x2="28" y2="54" opacity="0.35" />
-              <path d="M16 48L28 62L40 48" opacity="0.6" />
-            </svg>
-          </div>
-          <div class="hint-bar-item__label">Brake</div>
-        </div>
+        <input id="sensitivity-slider" type="range" min="0" max="100" value="50" aria-label="Steering sensitivity" />
+        <span id="sensitivity-value" class="sens-value">—</span>
       </div>
       <div id="touch-surface">
         <div id="touch-pad">
           <div id="touch-pad-label">TOUCHPAD</div>
           <div id="touch-feedback"></div>
+          <!-- Persistent sensitivity indicator: horizontal band showing the
+               required drag distance for max steer. Hidden in gyro mode. -->
+          <div id="range-indicator" class="range-indicator" aria-hidden="true">
+            <span class="range-tick range-tick--left"></span>
+            <span class="range-tick range-tick--right"></span>
+            <span class="range-center"></span>
+          </div>
           <!-- Drag visualization: anchored at the touchdown point so the
-               player can see how far they need to drag for full input. -->
+               player can see how far they need to drag for full steer. -->
           <svg id="touch-debug" viewBox="-200 -200 400 400" width="400" height="400">
-            <!-- Steer axis (horizontal) and brake axis (downward only). -->
+            <!-- Steer axis (horizontal). -->
             <line id="td-axis-h" class="td-axis" x1="-140" y1="0" x2="140" y2="0" />
-            <line id="td-axis-v" class="td-axis" x1="0" y1="0" x2="0" y2="140" />
             <!-- Steer dead zone ticks (±20) — fixed. -->
             <line class="td-tick td-tick--inner" x1="-20" y1="-12" x2="-20" y2="12" />
             <line class="td-tick td-tick--inner" x1="20" y1="-12" x2="20" y2="12" />
             <!-- Full-lock ticks at ±maxDrag (repositioned per-gesture). -->
             <line id="td-tick-max-l" class="td-tick td-tick--max" x1="-140" y1="-22" x2="-140" y2="22" />
             <line id="td-tick-max-r" class="td-tick td-tick--max" x1="140" y1="-22" x2="140" y2="22" />
-            <!-- Brake dead zone (50, fixed) + brake max (repositioned). -->
-            <line class="td-tick td-tick--brake" x1="-12" y1="50" x2="12" y2="50" />
-            <line id="td-tick-brake-max" class="td-tick td-tick--brake-max" x1="-18" y1="140" x2="18" y2="140" />
             <!-- Labels (repositioned with the markers). -->
             <text id="td-label-l" class="td-label td-label--max" x="-140" y="-30" text-anchor="middle">MAX</text>
             <text id="td-label-r" class="td-label td-label--max" x="140" y="-30" text-anchor="middle">MAX</text>
-            <text id="td-label-brake" class="td-label td-label--brake" x="0" y="160" text-anchor="middle">BRAKE</text>
             <!-- Anchor + finger. -->
             <circle class="td-center" cx="0" cy="0" r="5" />
             <circle id="td-finger" cx="0" cy="0" r="10" />
           </svg>
         </div>
+        <button id="brake-btn" type="button" aria-label="Brake">BRAKE</button>
+        <!-- Gyro-mode visualization: V-shape showing the tilt angle needed
+             for max steer, plus a live needle at the current tilt. Sits as
+             an overlay over whichever surface is active (pad in landscape,
+             full-width brake button in gyro mode). Ignores pointer events. -->
+        <svg id="gyro-indicator" class="gyro-indicator hidden" viewBox="-100 -100 200 200" aria-hidden="true">
+          <circle class="gyro-ring" cx="0" cy="0" r="80" />
+          <line id="gyro-left-bound" class="gyro-bound" x1="0" y1="0" x2="0" y2="-80" />
+          <line id="gyro-right-bound" class="gyro-bound" x1="0" y1="0" x2="0" y2="-80" />
+          <line id="gyro-needle" class="gyro-needle" x1="0" y1="0" x2="0" y2="-80" />
+          <circle class="gyro-center" cx="0" cy="0" r="5" />
+          <text id="gyro-left-label" class="gyro-angle-label" x="0" y="-88" text-anchor="middle">−25°</text>
+          <text id="gyro-right-label" class="gyro-angle-label" x="0" y="-88" text-anchor="middle">+25°</text>
+        </svg>
         <div id="game-hud">
           <div class="hud-row hud-big"><span id="hud-place"></span></div>
         </div>

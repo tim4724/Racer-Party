@@ -59,7 +59,7 @@ export class AiDriver {
     if (this.stuckTime >= STUCK_TIME) {
       this.respawnAtClosestWaypoint(pos);
       this.stuckTime = 0;
-      return { steer: 0, brake: 0, drift: false };
+      return { steer: 0, brake: 0 };
     }
 
     const closestIdx = this.track.closestWaypointIndex(pos);
@@ -67,7 +67,7 @@ export class AiDriver {
     const target = this.track.centerline[targetIdx];
 
     const toTarget = target.clone().sub(pos).setY(0);
-    if (toTarget.lengthSq() < 0.001) return { steer: 0, brake: 0, drift: false };
+    if (toTarget.lengthSq() < 0.001) return { steer: 0, brake: 0 };
     toTarget.normalize();
 
     const forward = this.car.forward().setY(0).normalize();
@@ -94,7 +94,7 @@ export class AiDriver {
     // brief target wobbles can never produce visible mode changes.
     this.smoothedBrake += (rawBrake - this.smoothedBrake) * 0.08;
 
-    return { steer, brake: this.smoothedBrake, drift: false };
+    return { steer, brake: this.smoothedBrake };
   }
 
   private respawnAtClosestWaypoint(pos: THREE.Vector3): void {

@@ -1,38 +1,31 @@
-// TouchInput — pointer-event drag → continuous {steer, brake} for the
-// controller side. Pure logic (no DOM rendering); the consumer wires
-// `onChange` to the network layer.
+// TouchInput — pointer-event drag → continuous `steer` for the controller
+// side. Brake is handled by the dedicated BRAKE button (see ControllerGame),
+// so this source only produces steer. The consumer wires `onChange` to the
+// network layer.
 //
-// Mode-locked drag model. The first axis to cross its dead zone picks the
-// gesture mode for the rest of the touch:
-//
-//   STEER mode (horizontal first):
-//     - Horizontal offset ramps steer 0 → ±1 over [DEAD_ZONE, maxDrag] px.
-//     - Vertical drag is IGNORED — no accidental brake while steering.
-//
-//   BRAKE mode (vertical first, dy > BRAKE_DEAD_ZONE):
-//     - Vertical offset ramps brake 0 → 1 over `maxDrag` px.
-//     - Horizontal offset is also active so the player can steer while
-//       braking / reversing (reverse-while-turning still works).
-//
-// Lift the finger to reset; the next touch picks a fresh mode.
+// Drag model:
+//   - Touchdown anchors at the finger position.
+//   - Horizontal distance from the anchor ramps steer 0 → ±1 over
+//     [DEAD_ZONE, maxDrag] px.
+//   - Vertical drag is ignored.
+//   - Lift the finger to reset; the next touch picks a fresh anchor.
 //
 // Tested in tests/touchinput.test.ts via the pure helpers `detectMode`
 // and `dragToInput`.
 
 import { clamp, type InputState } from '@shared/protocol';
+import {
+  sensitivityToTouchRange,
+  SENSITIVITY_DEFAULT,
+  type InputSource,
+  type InputSourceCallbacks,
+} from './inputs';
 
-export const DEAD_ZONE = 20;        // steer dead zone
-export const BRAKE_DEAD_ZONE = 50;  // brake dead zone (more deliberate)
-// Default max steer distance. Capped per-gesture at 45 % of the touchpad
-// width on small screens, but never more than this — a thumb's reach is
-// what matters, not the screen size. See `effectiveMaxDrag`.
+export const DEAD_ZONE = 20;  // horizontal dead zone before steer starts
+// Default max steer distance (only used by `effectiveMaxDrag` / legacy tests).
 export const MAX_DRAG = 120;
-// Drift activates when drag exceeds maxDrag by this many pixels.
-export const DRIFT_THRESHOLD = 25;
-// Steer magnitude below which drift auto-cancels (matches Car.ts hysteresis).
-const DRIFT_EXIT_STEER = 0.08;
-const DRIFT_VIBRATE_INTERVAL = 80;  // ms between vibration pulses
-const DRIFT_VIBRATE_PATTERN: number[] = [50, 30];
+// Kept for test compatibility with `detectMode` / `dragToInput`.
+export const BRAKE_DEAD_ZONE = 50;
 
 export type GestureMode = 'idle' | 'steer' | 'brake';
 
@@ -44,26 +37,25 @@ export function effectiveMaxDrag(touchpadWidthPx: number): number {
   return Math.min(MAX_DRAG, touchpadWidthPx * 0.45);
 }
 
-// Decide which mode the gesture is in given the current cumulative drag
-// and current mode. Once a mode is chosen, it sticks for the rest of the
-// gesture (caller resets to 'idle' on pointerup).
+// Legacy pure helper. The live source no longer uses it; we keep it (and
+// `dragToInput`) so tests/touchinput.test.ts keeps working.
 export function detectMode(current: GestureMode, dx: number, dy: number): GestureMode {
   if (current !== 'idle') return current;
-  // Brake commit (vertical) is checked first because its dead zone is
-  // larger — it requires a more deliberate downward drag.
   if (dy > BRAKE_DEAD_ZONE) return 'brake';
   if (Math.abs(dx) > DEAD_ZONE) return 'steer';
   return 'idle';
 }
 
-// Pure mapping from drag offset → input, given gesture mode.
+// Legacy pure helper used by tests. Returns `{ steer, brake }` where brake
+// may be non-zero only when the gesture was in brake mode — the live
+// TouchInput class no longer emits brake.
 export function dragToInput(
   dx: number,
   dy: number,
   mode: GestureMode,
   maxDrag: number = MAX_DRAG,
 ): InputState {
-  if (mode === 'idle') return { steer: 0, brake: 0, drift: false };
+  if (mode === 'idle') return { steer: 0, brake: 0 };
 
   const absX = Math.abs(dx);
 
@@ -72,10 +64,10 @@ export function dragToInput(
     const mag = absX <= DEAD_ZONE
       ? 0
       : clamp((absX - DEAD_ZONE) / Math.max(1, maxDrag - DEAD_ZONE), 0, 1);
-    return { steer: sign * mag, brake: 0, drift: false };
+    return { steer: sign * mag, brake: 0 };
   }
 
-  // mode === 'brake': both axes active so the player can reverse + steer.
+  // mode === 'brake': both axes active so tests can exercise reverse + steer.
   let steer = 0;
   if (absX > DEAD_ZONE) {
     const sign = dx < 0 ? -1 : 1;
@@ -85,31 +77,27 @@ export function dragToInput(
   if (dy > BRAKE_DEAD_ZONE) {
     brake = clamp((dy - BRAKE_DEAD_ZONE) / Math.max(1, maxDrag - BRAKE_DEAD_ZONE), 0, 1);
   }
-  return { steer, brake, drift: false };
+  return { steer, brake };
 }
 
-export interface TouchInputCallbacks {
-  onChange: (input: InputState) => void;
-}
+export type TouchInputCallbacks = InputSourceCallbacks;
 
-export class TouchInput {
+export class TouchInput implements InputSource {
   el: HTMLElement;
   callbacks: TouchInputCallbacks;
   activePointerId: number | null = null;
   anchorX = 0;
   anchorY = 0;
-  // Effective max drag for this gesture. Recomputed on each pointerdown so
-  // it adapts to the current touchpad width (orientation change, resize…).
+  // Effective max drag for the current sensitivity + pad width.
   private maxDrag: number = MAX_DRAG;
-  // Per-gesture mode lock — see the file header comment.
-  private mode: GestureMode = 'idle';
-  lastEmitted: InputState = { steer: 0, brake: 0, drift: false };
-  hapticArmed = true;
-  private drifting = false;
-  private driftVibrationTimer: ReturnType<typeof setInterval> | null = null;
+  // Steer-lock state: once the finger leaves the dead zone, we stick with
+  // steer for the rest of the gesture (so it can't later switch mode).
+  private steerLocked = false;
+  lastEmitted: InputState = { steer: 0, brake: 0 };
+  private sensitivity: number = SENSITIVITY_DEFAULT;
 
   // Drag-debug overlay (optional). Anchored to the touchdown point and
-  // updated on every move so the player can see their dead zones + range.
+  // updated on every move so the player can see the max-drag range.
   private debugEl: SVGElement | null = null;
   private debugFinger: SVGCircleElement | null = null;
 
@@ -119,9 +107,14 @@ export class TouchInput {
   private boundCancel = (e: PointerEvent) => this.onPointerUp(e);
   private boundContext = (e: Event) => e.preventDefault();
 
-  constructor(el: HTMLElement, callbacks: TouchInputCallbacks) {
+  constructor(
+    el: HTMLElement,
+    callbacks: TouchInputCallbacks,
+    sensitivity: number = SENSITIVITY_DEFAULT,
+  ) {
     this.el = el;
     this.callbacks = callbacks;
+    this.sensitivity = sensitivity;
     this.el.style.touchAction = 'none';
 
     this.el.addEventListener('pointerdown', this.boundDown);
@@ -130,9 +123,15 @@ export class TouchInput {
     this.el.addEventListener('pointercancel', this.boundCancel);
     this.el.addEventListener('contextmenu', this.boundContext);
 
-    // Attach to optional debug overlay if it exists in the DOM.
     this.debugEl = document.getElementById('touch-debug') as SVGElement | null;
     this.debugFinger = document.getElementById('td-finger') as unknown as SVGCircleElement | null;
+
+    this.maxDrag = this.computeMaxDrag();
+    this.renderRangeIndicator();
+  }
+
+  private computeMaxDrag(): number {
+    return sensitivityToTouchRange(this.sensitivity, this.el.clientWidth);
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -143,53 +142,67 @@ export class TouchInput {
     this.el.setPointerCapture(e.pointerId);
     this.anchorX = e.clientX;
     this.anchorY = e.clientY;
-    this.maxDrag = effectiveMaxDrag(this.el.clientWidth);
-    this.mode = 'idle';
-    this.hapticArmed = true;
-    this.stopDriftVibration();
-    this.drifting = false;
+    this.maxDrag = this.computeMaxDrag();
+    this.steerLocked = false;
     this.showDebugAtAnchor(e.clientX, e.clientY);
-    this.emit({ steer: 0, brake: 0, drift: false });
+    this.emit({ steer: 0, brake: 0 });
   }
 
   private onPointerMove(e: PointerEvent): void {
     if (e.pointerId !== this.activePointerId) return;
     const dx = e.clientX - this.anchorX;
     const dy = e.clientY - this.anchorY;
-    this.mode = detectMode(this.mode, dx, dy);
-    const input = dragToInput(dx, dy, this.mode, this.maxDrag);
 
-    // Drift detection: activate when dragging past maxDrag in steer mode.
-    if (this.mode === 'steer' && !this.drifting && Math.abs(dx) > this.maxDrag + DRIFT_THRESHOLD) {
-      this.drifting = true;
-      this.startDriftVibration();
-    }
-    // Exit drift when steer returns near center.
-    if (this.drifting && Math.abs(input.steer) < DRIFT_EXIT_STEER) {
-      this.drifting = false;
-      this.stopDriftVibration();
-    }
-    input.drift = this.drifting;
+    if (!this.steerLocked && Math.abs(dx) > DEAD_ZONE) this.steerLocked = true;
 
-    if (input.brake > 0.1 && this.hapticArmed) {
-      this.haptic(15);
-      this.hapticArmed = false;
-    } else if (input.brake === 0) {
-      this.hapticArmed = true;
-    }
+    const absX = Math.abs(dx);
+    const steerMag = this.steerLocked && absX > DEAD_ZONE
+      ? clamp((absX - DEAD_ZONE) / Math.max(1, this.maxDrag - DEAD_ZONE), 0, 1)
+      : 0;
+    const steer = (dx < 0 ? -1 : dx > 0 ? 1 : 0) * steerMag;
+
     this.updateDebugFinger(dx, dy);
-    this.emit(input);
+    this.emit({ steer, brake: 0 });
   }
 
   private onPointerUp(e: PointerEvent): void {
     if (e.pointerId !== this.activePointerId) return;
     this.activePointerId = null;
-    this.mode = 'idle';
-    this.drifting = false;
-    this.stopDriftVibration();
+    this.steerLocked = false;
     try { this.el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
     this.hideDebug();
-    this.emit({ steer: 0, brake: 0, drift: false });
+    this.emit({ steer: 0, brake: 0 });
+  }
+
+  // ---- InputSource interface ----
+
+  setBrakeButtonPressed(_pressed: boolean): void {
+    // Reserved hook — the source currently doesn't react to brake state.
+  }
+
+  setSensitivity(value: number): void {
+    this.sensitivity = value;
+    this.maxDrag = this.computeMaxDrag();
+    this.renderRangeIndicator();
+  }
+
+  // Paint the persistent range indicator inside the pad — two vertical ticks
+  // at ±maxDrag from the pad's center, labelled with the pixel distance.
+  private renderRangeIndicator(): void {
+    const indicator = document.getElementById('range-indicator');
+    if (!indicator) return;
+    indicator.classList.remove('hidden');
+    const left = indicator.querySelector<HTMLElement>('.range-tick--left');
+    const right = indicator.querySelector<HTMLElement>('.range-tick--right');
+    const label = `${Math.round(this.maxDrag)}px`;
+    if (left) {
+      left.style.left = `calc(50% - ${this.maxDrag}px)`;
+      left.dataset.label = label;
+    }
+    if (right) {
+      right.style.left = `calc(50% + ${this.maxDrag}px)`;
+      right.dataset.label = label;
+    }
   }
 
   // ---- Debug overlay ----
@@ -202,18 +215,12 @@ export class TouchInput {
     (this.debugEl as unknown as HTMLElement).style.left = `${x}px`;
     (this.debugEl as unknown as HTMLElement).style.top = `${y}px`;
 
-    // Reposition the dynamic SVG markers to match the effective max drag.
-    // The static SVG ships with placeholder x/y values; we overwrite them
-    // here so the player can see the actual range for the current touchpad.
     const m = this.maxDrag;
     this.setSvgLine('td-axis-h', { x1: -m, y1: 0, x2: m, y2: 0 });
-    this.setSvgLine('td-axis-v', { x1: 0, y1: 0, x2: 0, y2: m });
     this.setSvgLine('td-tick-max-l', { x1: -m, y1: -18, x2: -m, y2: 18 });
     this.setSvgLine('td-tick-max-r', { x1: m, y1: -18, x2: m, y2: 18 });
-    this.setSvgLine('td-tick-brake-max', { x1: -18, y1: m, x2: 18, y2: m });
     this.setSvgText('td-label-l', { x: -m, y: -26 });
     this.setSvgText('td-label-r', { x: m, y: -26 });
-    this.setSvgText('td-label-brake', { x: 0, y: m + 20 });
 
     if (this.debugFinger) {
       this.debugFinger.setAttribute('cx', '0');
@@ -252,8 +259,7 @@ export class TouchInput {
     // Emit only on meaningful changes — caller throttles further on the wire.
     if (
       Math.abs(input.steer - this.lastEmitted.steer) < 0.005 &&
-      Math.abs(input.brake - this.lastEmitted.brake) < 0.005 &&
-      input.drift === this.lastEmitted.drift
+      Math.abs(input.brake - this.lastEmitted.brake) < 0.005
     ) {
       return;
     }
@@ -261,28 +267,7 @@ export class TouchInput {
     this.callbacks.onChange(input);
   }
 
-  private haptic(pattern: number | number[]): void {
-    if (navigator.vibrate) navigator.vibrate(pattern);
-  }
-
-  private startDriftVibration(): void {
-    this.stopDriftVibration();
-    this.haptic(DRIFT_VIBRATE_PATTERN);
-    this.driftVibrationTimer = setInterval(() => {
-      this.haptic(DRIFT_VIBRATE_PATTERN);
-    }, DRIFT_VIBRATE_INTERVAL);
-  }
-
-  private stopDriftVibration(): void {
-    if (this.driftVibrationTimer !== null) {
-      clearInterval(this.driftVibrationTimer);
-      this.driftVibrationTimer = null;
-    }
-    if (navigator.vibrate) navigator.vibrate(0);
-  }
-
   dispose(): void {
-    this.stopDriftVibration();
     this.el.removeEventListener('pointerdown', this.boundDown);
     this.el.removeEventListener('pointermove', this.boundMove);
     this.el.removeEventListener('pointerup', this.boundUp);

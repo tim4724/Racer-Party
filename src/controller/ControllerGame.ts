@@ -8,7 +8,18 @@
 
 import { ControllerConnection } from './ControllerConnection';
 import { TouchInput } from './TouchInput';
+import { GyroInput, requestGyroPermission } from './GyroInput';
 import { ControllerHud } from './Hud';
+import {
+  type InputMode,
+  type InputSource,
+  loadInputMode,
+  saveInputMode,
+  loadSensitivity,
+  saveSensitivity,
+  sensitivityToTouchRange,
+  sensitivityToTiltRange,
+} from './inputs';
 import { MUTED_STORAGE_KEY, type InputState, type ErrorCode, type RaceEndStanding } from '@shared/protocol';
 
 const SCREENS = {
@@ -22,7 +33,8 @@ type ScreenId = (typeof SCREENS)[keyof typeof SCREENS];
 export class ControllerGame {
   roomCode: string;
   connection: ControllerConnection;
-  touch: TouchInput | null = null;
+  // Active input source (touchpad, slider, or gyro). Nulled between races.
+  source: InputSource | null = null;
   hud: ControllerHud;
   carId: number | null = null;
   color: string | null = null;
@@ -34,6 +46,19 @@ export class ControllerGame {
   // set until the display returns to the lobby; while set we ignore the
   // current race's COUNTDOWN/RACE_START broadcasts.
   private waitingForNextGame = false;
+  // Merged-input state. The active source emits via onChange; the dedicated
+  // BRAKE button overlays `brake=1` while held.
+  private lastSourceInput: InputState = { steer: 0, brake: 0 };
+  private buttonDown = false;
+  private buttonDisposer: (() => void) | null = null;
+  // User-selected settings (persisted to localStorage; picked on game screen).
+  private inputMode: InputMode = loadInputMode();
+  // Sensitivity is stored per input mode — touch and gyro have very
+  // different "feel" envelopes.
+  private sensitivity: number = loadSensitivity(loadInputMode());
+  // Max-lock edge bump: armed while |steer| is below the re-arm point,
+  // fires one pulse when steer reaches saturation (1.0).
+  private hapticArmed = true;
 
   constructor(roomCode: string) {
     this.roomCode = roomCode;
@@ -98,8 +123,11 @@ export class ControllerGame {
   // local state, return to the name screen.
   performDisconnect(): void {
     this.connection.performDisconnect();
-    this.touch?.dispose();
-    this.touch = null;
+    this.disposeControls();
+    // If we were in gyro/landscape, release the orientation lock and exit
+    // fullscreen so the name screen is usable.
+    this.exitLandscape();
+    this.setGyroStatus('');
     this.carId = null;
     this.color = null;
     this.playerCount = 0;
@@ -147,6 +175,8 @@ export class ControllerGame {
   // -------------------------------------------------------------------------
 
   private bindHandlers(): void {
+    this.bindPickers();
+
     const joinBtn = document.getElementById('join-btn') as HTMLButtonElement | null;
     const form = document.getElementById('name-form') as HTMLFormElement | null;
     const nameInput = document.getElementById('name-input') as HTMLInputElement | null;
@@ -155,6 +185,8 @@ export class ControllerGame {
       const raw = nameInput?.value ?? '';
       const name = raw.trim().slice(0, 16);
       this.vibrate(10);
+      // Gyro permission + landscape lock are handled on the lobby's
+      // Steering picker tap (user gesture) — not here.
       this.join(name);
     };
 
@@ -172,8 +204,11 @@ export class ControllerGame {
 
     const startBtn = document.getElementById('start-btn') as HTMLButtonElement | null;
     startBtn?.addEventListener('click', () => {
-      if (startBtn.disabled) return;
       this.vibrate(10);
+      // Tap is a user gesture — use it to request fullscreen (+ landscape
+      // lock for gyro) before asking the display to start the race.
+      if (this.inputMode === 'gyro') void this.enterLandscape();
+      else void this.enterFullscreen();
       this.connection.requestStart();
     });
 
@@ -247,6 +282,128 @@ export class ControllerGame {
     if (detail) detail.textContent = '';
   }
 
+  // Wire up the game-screen Touch/Gyro picker. Tapping a mode persists the
+  // choice, requests gyro permission + landscape lock on the fly (gyro only),
+  // swaps the active InputSource, and loads that mode's stored sensitivity.
+  private bindPickers(): void {
+    const inputPicker = document.querySelector<HTMLElement>('.picker[data-picker="input-mode"]');
+    if (!inputPicker) return;
+    this.highlightInputMode();
+    inputPicker.addEventListener('click', (e) => {
+      const target = (e.target as HTMLElement).closest<HTMLElement>('.picker-opt');
+      if (!target || !target.dataset.value) return;
+      const next = target.dataset.value as InputMode;
+      if (next === this.inputMode) return;
+      this.vibrate(8);
+      void this.changeInputMode(next);
+    });
+  }
+
+  private highlightInputMode(): void {
+    const picker = document.querySelector<HTMLElement>('.picker[data-picker="input-mode"]');
+    for (const opt of Array.from(picker?.querySelectorAll<HTMLElement>('.picker-opt') ?? [])) {
+      opt.classList.toggle('selected', opt.dataset.value === this.inputMode);
+    }
+  }
+
+  // Switch input modes at any point (including mid-race). Persists the
+  // choice, handles gyro's permission/landscape side effects, then swaps
+  // the live source if one is running.
+  //
+  // Order matters: side effects that need the browser's user-gesture token
+  // (requestFullscreen, orientation.lock, iOS DeviceOrientationEvent
+  // permission) must be kicked off BEFORE any `await` — otherwise the
+  // gesture context is lost and they silently reject. We also swap the
+  // source synchronously so the UI reflects the new mode immediately,
+  // independent of how the async side effects resolve.
+  private async changeInputMode(next: InputMode): Promise<void> {
+    const prev = this.inputMode;
+    this.inputMode = next;
+    saveInputMode(next);
+    this.highlightInputMode();
+
+    // Load this mode's own sensitivity and push it to the slider.
+    this.sensitivity = loadSensitivity(next);
+    this.syncSensitivityUI();
+
+    // Kick off gyro side effects inside the user-gesture window. Don't
+    // await — we need the sync swap below to happen before any microtask.
+    let permissionPromise: Promise<'granted' | 'denied' | 'unsupported'> | null = null;
+    if (next === 'gyro' && prev !== 'gyro') {
+      permissionPromise = requestGyroPermission();
+      void this.enterLandscape();
+    } else if (prev === 'gyro' && next !== 'gyro') {
+      this.setGyroStatus('');
+      this.exitLandscape();
+    }
+
+    // Swap the live source NOW (sync) so the UI flips to gyro/touch layout
+    // immediately — regardless of permission or fullscreen outcome.
+    if (this.source && this.currentScreen === 'game-screen') {
+      this.source.dispose();
+      this.source = null;
+      this.initTouchInput();
+    }
+
+    // Surface the permission result once it resolves.
+    if (permissionPromise) {
+      const res = await permissionPromise;
+      if (res === 'denied') {
+        this.setGyroStatus('Motion permission denied — pick Touch to continue.');
+      } else if (res === 'unsupported') {
+        this.setGyroStatus('Gyro unsupported in this browser.');
+      } else {
+        this.setGyroStatus('Hold phone in landscape. Tilt to steer.');
+      }
+    }
+  }
+
+  private syncSensitivityUI(): void {
+    const slider = document.getElementById('sensitivity-slider') as HTMLInputElement | null;
+    if (slider) slider.value = String(this.sensitivity);
+    this.source?.setSensitivity(this.sensitivity);
+    this.updateSensitivityLabel();
+  }
+
+  private setGyroStatus(text: string): void {
+    const el = document.getElementById('gyro-status');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('hidden', !text);
+  }
+
+  // Best-effort fullscreen request. Android Chrome honours it from a user
+  // gesture. iOS Safari has no fullscreen API on the document element — the
+  // call fails silently and the user stays in a browser chrome viewport.
+  private async enterFullscreen(): Promise<void> {
+    try {
+      const el = document.documentElement;
+      if (el.requestFullscreen && !document.fullscreenElement) {
+        await el.requestFullscreen({ navigationUI: 'hide' });
+      }
+    } catch { /* ignore — not supported or denied */ }
+  }
+
+  // Fullscreen + landscape orientation lock. Used when switching into gyro
+  // mode so the player is immediately holding the phone like a wheel.
+  private async enterLandscape(): Promise<void> {
+    await this.enterFullscreen();
+    try {
+      const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+      if (orientation?.lock) await orientation.lock('landscape');
+    } catch { /* ignore */ }
+  }
+
+  private exitLandscape(): void {
+    try {
+      const orientation = screen.orientation as ScreenOrientation & { unlock?: () => void };
+      orientation?.unlock?.();
+    } catch { /* ignore */ }
+    try {
+      if (document.fullscreenElement) void document.exitFullscreen();
+    } catch { /* ignore */ }
+  }
+
   private toggleMute(): void {
     this.muted = !this.muted;
     try {
@@ -276,13 +433,7 @@ export class ControllerGame {
     this.playerName = name || this.playerName;
     this.hud.setIdentity(this.playerName || `P${carId + 1}`, color);
 
-    // Reflect identity on the lobby card.
-    const identity = document.getElementById('player-identity');
-    if (identity) identity.style.setProperty('--player-color', color);
-    const nameEl = document.getElementById('player-identity-name');
-    if (nameEl) nameEl.textContent = this.playerName || `P${carId + 1}`;
-
-    // Also colour the in-game name pill.
+    // Colour the in-game name pill.
     const gameName = document.getElementById('hud-name');
     if (gameName) gameName.style.setProperty('--player-color', color);
 
@@ -299,36 +450,23 @@ export class ControllerGame {
 
     if (this.currentScreen === 'name-screen') this.showScreen('lobby-screen');
 
-    this.refreshStartButton();
+    this.refreshLobbyStatus();
   }
 
   private onLobbyUpdate(players: Array<{ id: string; name: string; color: string }>): void {
     this.playerCount = players.length;
-    this.refreshStartButton();
+    this.refreshLobbyStatus();
   }
 
-  private refreshStartButton(): void {
-    const startBtn = document.getElementById('start-btn') as HTMLButtonElement | null;
+  private refreshLobbyStatus(): void {
     const status = document.getElementById('lobby-status') as HTMLParagraphElement | null;
-    if (!startBtn) return;
-
+    const startBtn = document.getElementById('start-btn') as HTMLButtonElement | null;
     if (this.waitingForNextGame) {
-      startBtn.classList.add('hidden');
-      startBtn.disabled = true;
       if (status) status.textContent = 'Game in progress — you\'ll join the next race.';
-      return;
-    }
-
-    startBtn.classList.remove('hidden');
-    const ready = this.playerCount > 0;
-    startBtn.disabled = !ready;
-    if (ready) {
-      startBtn.textContent =
-        this.playerCount > 1 ? `START (${this.playerCount})` : 'START RACE';
-      if (status) status.textContent = 'Any player can tap start.';
+      startBtn?.classList.add('hidden');
     } else {
-      startBtn.textContent = 'WAITING…';
-      if (status) status.textContent = 'Waiting for the display…';
+      if (status) status.textContent = 'Tap START to begin.';
+      startBtn?.classList.remove('hidden');
     }
   }
 
@@ -354,30 +492,169 @@ export class ControllerGame {
   }
 
   private initTouchInput(): void {
-    if (this.touch) return;
+    if (this.source) return;
     const pad = document.getElementById('touch-pad') as HTMLDivElement;
     const feedback = document.getElementById('touch-feedback') as HTMLDivElement;
-    this.touch = new TouchInput(pad, {
-      onChange: (input: InputState) => {
-        this.connection.sendInput(input);
-        const intensity = Math.max(Math.abs(input.steer), input.brake);
-        const color = input.brake > 0.05 ? 'rgba(239, 100, 97,' : 'rgba(255, 122, 24,';
-        feedback.style.background = `radial-gradient(circle at center, ${color} ${intensity * 0.3}) 0%, rgba(0,0,0,0) 70%)`;
-      },
-    });
+    this.lastSourceInput = { steer: 0, brake: 0 };
+    this.buttonDown = false;
+
+    const onChange = (input: InputState) => {
+      this.lastSourceInput = input;
+      this.emitMergedInput(feedback);
+    };
+
+    // Tag the game screen with the active input mode so CSS can expand
+    // the BRAKE button to full width in gyro mode.
+    document.getElementById('game-screen')?.setAttribute('data-input', this.inputMode);
+
+    if (this.inputMode === 'gyro') {
+      this.source = new GyroInput({ onChange }, this.sensitivity);
+    } else {
+      // touch_a and touch_b share the same source — only CSS layout differs.
+      this.source = new TouchInput(pad, { onChange }, this.sensitivity);
+    }
+
+    this.attachButton(feedback);
+    this.bindSensitivitySlider();
+    this.updateSensitivityLabel();
+  }
+
+  // Wire the sensitivity slider at the top of the game screen. Idempotent —
+  // reattaching after a source reset is fine because we replace the handler.
+  private bindSensitivitySlider(): void {
+    const slider = document.getElementById('sensitivity-slider') as HTMLInputElement | null;
+    if (!slider) return;
+    slider.value = String(this.sensitivity);
+    slider.oninput = () => {
+      const v = parseInt(slider.value, 10) || 0;
+      this.sensitivity = v;
+      saveSensitivity(this.inputMode, v);
+      this.source?.setSensitivity(v);
+      this.updateSensitivityLabel();
+    };
+  }
+
+  // Show the effective threshold (drag px or tilt °) next to the slider.
+  private updateSensitivityLabel(): void {
+    const el = document.getElementById('sensitivity-value');
+    if (!el) return;
+    if (this.inputMode === 'gyro') {
+      el.textContent = `±${sensitivityToTiltRange(this.sensitivity).toFixed(0)}°`;
+    } else {
+      const pad = document.getElementById('touch-pad');
+      const width = pad?.clientWidth ?? 360;
+      el.textContent = `${Math.round(sensitivityToTouchRange(this.sensitivity, width))}px`;
+    }
+  }
+
+  // Combines the active source's steer/brake with the dedicated BRAKE
+  // button (held → brake=1 overrides the source's brake).
+  private emitMergedInput(feedback: HTMLDivElement): void {
+    const src = this.lastSourceInput;
+    const merged: InputState = {
+      steer: src.steer,
+      brake: this.buttonDown ? 1 : src.brake,
+    };
+    this.connection.sendInput(merged);
+    this.updateHaptics(merged.steer);
+
+    const intensity = Math.max(Math.abs(merged.steer), merged.brake);
+    const color = merged.brake > 0.05 ? 'rgba(239, 100, 97,' : 'rgba(255, 122, 24,';
+    feedback.style.background = `radial-gradient(circle at center, ${color} ${intensity * 0.3}) 0%, rgba(0,0,0,0) 70%)`;
+  }
+
+  // Max-lock edge bump: a single firm pulse when |steer| reaches full lock.
+  // Re-arms once steer drops below the hysteresis band so holding at the
+  // limit (or jittering near it) doesn't spam vibration.
+  private static readonly HAPTIC_MAX_PULSE_MS = 22;
+  private static readonly HAPTIC_REARM_BELOW = 0.92;  // 1.0 − 0.08 hysteresis
+  private updateHaptics(steer: number): void {
+    const curr = Math.abs(steer);
+    if (this.hapticArmed) {
+      if (curr >= 1.0) {
+        this.hapticArmed = false;
+        this.vibrate(ControllerGame.HAPTIC_MAX_PULSE_MS);
+      }
+    } else if (curr < ControllerGame.HAPTIC_REARM_BELOW) {
+      this.hapticArmed = true;
+    }
+  }
+
+  private attachButton(feedback: HTMLDivElement): void {
+    const btn = document.getElementById('brake-btn') as HTMLButtonElement | null;
+    if (!btn) return;
+
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      e.preventDefault();
+      try { btn.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      this.buttonDown = true;
+      btn.classList.add('active');
+      this.source?.setBrakeButtonPressed(true);
+      this.startBrakeVibration();
+      this.emitMergedInput(feedback);
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!this.buttonDown) return;
+      this.buttonDown = false;
+      btn.classList.remove('active');
+      try { btn.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      this.source?.setBrakeButtonPressed(false);
+      this.stopBrakeVibration();
+      this.emitMergedInput(feedback);
+    };
+
+    btn.addEventListener('pointerdown', onDown);
+    btn.addEventListener('pointerup', onUp);
+    btn.addEventListener('pointercancel', onUp);
+
+    this.buttonDisposer = () => {
+      btn.removeEventListener('pointerdown', onDown);
+      btn.removeEventListener('pointerup', onUp);
+      btn.removeEventListener('pointercancel', onUp);
+      btn.classList.remove('active');
+      this.buttonDown = false;
+      this.stopBrakeVibration();
+    };
+  }
+
+  // Continuous buzz while the BRAKE button is held. Each call issues an
+  // 80 ms pulse; the interval re-fires every 60 ms so the next pulse
+  // starts before the previous ends — no audible/tactile gap.
+  private brakeVibrationTimer: ReturnType<typeof setInterval> | null = null;
+  private startBrakeVibration(): void {
+    this.stopBrakeVibration();
+    if (!navigator.vibrate) return;
+    navigator.vibrate(80);
+    this.brakeVibrationTimer = setInterval(() => {
+      navigator.vibrate(80);
+    }, 60);
+  }
+  private stopBrakeVibration(): void {
+    if (this.brakeVibrationTimer !== null) {
+      clearInterval(this.brakeVibrationTimer);
+      this.brakeVibrationTimer = null;
+    }
+    if (navigator.vibrate) navigator.vibrate(0);
+  }
+
+  private disposeControls(): void {
+    this.source?.dispose();
+    this.source = null;
+    this.buttonDisposer?.();
+    this.buttonDisposer = null;
   }
 
   // Display ended the race and went back to its lobby — bounce out of the
   // game / results screen so the player is ready for the next race. Also
   // clears the late-joiner waiting flag so the start button reappears.
   private onReturnToLobby(): void {
-    this.touch?.dispose();
-    this.touch = null;
+    this.disposeControls();
     this.waitingForNextGame = false;
     document.getElementById('pause-overlay')?.classList.add('hidden');
     if (this.currentScreen !== 'name-screen') {
       this.showScreen('lobby-screen');
-      this.refreshStartButton();
+      this.refreshLobbyStatus();
     }
   }
 
@@ -398,8 +675,7 @@ export class ControllerGame {
   private onError(code: ErrorCode, message: string): void {
     // Tear down any in-game UI and bounce the user back to the name screen
     // with the right error chrome.
-    this.touch?.dispose();
-    this.touch = null;
+    this.disposeControls();
     document.getElementById('pause-overlay')?.classList.add('hidden');
     document.getElementById('reconnect-overlay')?.classList.add('hidden');
 
@@ -491,8 +767,7 @@ export class ControllerGame {
 
   private resultsBtnTimer: ReturnType<typeof setTimeout> | null = null;
   private showResults(standings: RaceEndStanding[]): void {
-    this.touch?.dispose();
-    this.touch = null;
+    this.disposeControls();
     document.getElementById('pause-overlay')?.classList.add('hidden');
 
     // 2 s activation delay so a still-finishing player can't accidentally
