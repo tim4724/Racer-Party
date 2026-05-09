@@ -4,7 +4,7 @@ import { openDisplay, joinController, waitForDisplayPlayers } from './helpers';
 test('display creates a room and 2 controllers join', async ({ browser }) => {
   const ctx = await browser.newContext();
   const { page: display, roomCode } = await openDisplay(ctx);
-  expect(roomCode).toMatch(/^[A-Z0-9]{4}$/);
+  expect(roomCode).toMatch(/^[A-Za-z0-9]{6}$/);
 
   await joinController(ctx, roomCode, 'Alice');
   await joinController(ctx, roomCode, 'Bob');

@@ -453,7 +453,7 @@ export class ControllerGame {
     this.refreshLobbyStatus();
   }
 
-  private onLobbyUpdate(players: Array<{ id: string; name: string; color: string }>): void {
+  private onLobbyUpdate(players: Array<{ id: number; name: string; color: string }>): void {
     this.playerCount = players.length;
     this.refreshLobbyStatus();
   }

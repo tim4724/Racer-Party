@@ -14,9 +14,10 @@ export async function openDisplay(context: BrowserContext): Promise<DisplayHandl
   // ?debug=1 skips welcome screen and connects automatically.
   // Wait until the join URL element contains a 4-letter room code.
   const joinUrl = page.locator('#join-url');
-  await expect(joinUrl).toHaveText(/^https?:\/\/[^/]+\/[A-Z0-9]{4}$/, { timeout: 30_000 });
+  // Party-Sockets returns a 6-char base58 code (mixed case, no 0/O/I/l).
+  await expect(joinUrl).toHaveText(/^https?:\/\/[^/]+\/[A-Za-z0-9]{6}$/, { timeout: 30_000 });
   const url = (await joinUrl.textContent()) || '';
-  const m = url.match(/\/([A-Z0-9]{4})$/);
+  const m = url.match(/\/([A-Za-z0-9]{6})$/);
   if (!m) throw new Error(`No room code in join URL: ${url}`);
   return { page, roomCode: m[1] };
 }

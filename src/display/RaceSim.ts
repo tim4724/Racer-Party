@@ -46,8 +46,8 @@ export class RaceSim {
   cars: Car[] = [];
   aiDrivers = new Map<number, AiDriver>(); // carId → AI
 
-  // Map<clientId, carId> for routing INPUT messages.
-  private clientToCarId = new Map<string, number>();
+  // Map<peerIndex, carId> for routing INPUT messages.
+  private clientToCarId = new Map<number, number>();
 
   private accumulator = 0;
   private lastTime = 0;
@@ -136,8 +136,8 @@ export class RaceSim {
     }
   }
 
-  applyHumanInput(clientId: string, input: InputState): void {
-    const carId = this.clientToCarId.get(clientId);
+  applyHumanInput(peerIndex: number, input: InputState): void {
+    const carId = this.clientToCarId.get(peerIndex);
     if (carId === undefined) return;
     const car = this.cars[carId];
     if (car) car.applyInput(input);

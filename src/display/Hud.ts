@@ -47,22 +47,22 @@ export class Hud {
   }
 
   // Show the disconnect overlay on a specific car's viewport.
-  setDisconnected(carId: number, disconnected: boolean, clientId?: string): void {
+  setDisconnected(carId: number, disconnected: boolean): void {
     const idx = this.split.cars.findIndex((c) => c.carId === carId);
     if (idx < 0) return;
     const dc = this.disconnectDivs[idx];
     if (!dc) return;
     dc.classList.toggle('hidden', !disconnected);
-    if (disconnected) this.renderQR(dc, clientId);
+    if (disconnected) this.renderQR(dc);
   }
 
-  private renderQR(dc: HTMLDivElement, clientId?: string): void {
+  private renderQR(dc: HTMLDivElement): void {
     if (!this.joinUrl) return;
-    // Append ?rejoin=<clientId> so the controller reconnects with the same
-    // identity and the relay re-associates it with the existing player slot.
-    const url = clientId
-      ? this.joinUrl + '?rejoin=' + encodeURIComponent(clientId)
-      : this.joinUrl;
+    // The relay's clientId is now a server-side bearer secret that never
+    // crosses the wire, so we can't embed a per-slot token in the QR. The
+    // same phone reclaims its slot through sessionStorage; a different
+    // phone scanning the QR gets a fresh slot.
+    const url = this.joinUrl;
     const canvas = dc.querySelector('.viewport-disconnect-qr') as HTMLCanvasElement | null;
     if (!canvas || canvas.dataset.rendered === url) return;
     canvas.dataset.rendered = url;

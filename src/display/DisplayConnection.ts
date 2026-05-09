@@ -6,6 +6,11 @@
 //   - Track player join/leave + assign colors from PLAYER_COLORS
 //   - Dispatch INPUT messages back to RaceSim via callback
 //   - Broadcast lobby/countdown/race-start/race-end messages
+//
+// Identity model: the display creates the room, so its own slot index is
+// always 0. Controllers are slot indices >= 1, assigned by the relay. We key
+// every player by that index — the underlying clientId is a per-connection
+// bearer secret that never leaves the controller.
 
 import {
   PartyConnection,
@@ -32,7 +37,7 @@ import {
 import type { DisplayState } from './DisplayState';
 
 export interface Player {
-  id: string;
+  id: number; // relay-assigned slot index (>= 1; display is index 0)
   name: string;
   color: string;
   carId: number; // 0..3, slot in the race
@@ -41,7 +46,7 @@ export interface Player {
 
 export interface DisplayConnectionCallbacks {
   onLobbyChanged: () => void;
-  onPlayerInput: (clientId: string, input: InputState) => void;
+  onPlayerInput: (peerIndex: number, input: InputState) => void;
   onStartRequested: () => void;
   onPauseRequested: () => void;
   onResumeRequested: () => void;
@@ -53,8 +58,8 @@ export interface DisplayConnectionCallbacks {
   onRelayRestored: () => void;
   // Per-controller liveness. Called when a message arrives (alive) or when
   // no messages have been received within the timeout (dead).
-  onPlayerAlive: (clientId: string) => void;
-  onPlayerDead: (clientId: string) => void;
+  onPlayerAlive: (peerIndex: number) => void;
+  onPlayerDead: (peerIndex: number) => void;
   // Returns true if new players are still allowed (i.e. lobby state, room not full).
   isAcceptingPlayers: () => boolean;
   // Current room state — echoed to the joining controller via WELCOME so it
@@ -65,6 +70,11 @@ export interface DisplayConnectionCallbacks {
 const HEARTBEAT_INTERVAL_MS = 1000;
 const HEARTBEAT_TIMEOUT_MS = 3000;
 
+// The display always creates the room, so its slot index is always 0. We use
+// this as the heartbeat target — sending to your own index round-trips through
+// the relay.
+const DISPLAY_INDEX = 0;
+
 export class DisplayConnection {
   private party: PartyConnection | null = null;
   private state: DisplayState;
@@ -73,7 +83,7 @@ export class DisplayConnection {
   private lastHeartbeatEcho = 0;
   private heartbeatDead = false;
   // Active racers whose peer_left fired mid-race. Cleaned up on return to lobby.
-  private leftDuringRace = new Set<string>();
+  private leftDuringRace = new Set<number>();
 
   constructor(state: DisplayState, callbacks: DisplayConnectionCallbacks) {
     this.state = state;
@@ -86,6 +96,9 @@ export class DisplayConnection {
     // Eagerly fetch the LAN base URL on localhost so the QR is reachable from phones.
     this.fetchBaseUrl();
 
+    // The display's clientId can be any stable string — the relay just uses it
+    // to recognise reconnects to the same slot. 'display' is fine because
+    // there's only ever one display per room.
     this.party = new PartyConnection(RELAY_URL, { clientId: 'display' });
 
     this.party.onOpen = () => {
@@ -99,7 +112,7 @@ export class DisplayConnection {
     this.party.onProtocol = (type, msg) => this.handleProtocol(type, msg);
 
     this.party.onMessage = (from, data) => {
-      if (from === 'display') {
+      if (from === DISPLAY_INDEX) {
         // Self-heartbeat echo — update timestamp to confirm relay is alive.
         if (data && typeof data === 'object' && (data as any).type === '_heartbeat') {
           this.lastHeartbeatEcho = Date.now();
@@ -138,16 +151,16 @@ export class DisplayConnection {
         this.heartbeatDead = false;
         this.callbacks.onRelayRestored();
         this.startHeartbeat();
-        // Resync with the relay's authoritative client list.
-        const clients = (msg as { type: 'joined'; room: string; clients: string[] }).clients || [];
-        this.onDisplayRejoined(clients);
+        // Resync with the relay's authoritative peer list.
+        const peers = (msg as { type: 'joined'; room: string; index: number; peers: number[] }).peers || [];
+        this.onDisplayRejoined(peers);
         break;
       }
       case 'peer_joined':
-        this.onPeerJoined((msg as { type: 'peer_joined'; clientId: string }).clientId);
+        this.onPeerJoined((msg as { type: 'peer_joined'; index: number }).index);
         break;
       case 'peer_left':
-        this.onPeerLeft((msg as { type: 'peer_left'; clientId: string }).clientId);
+        this.onPeerLeft((msg as { type: 'peer_left'; index: number }).index);
         break;
       case 'error':
         console.warn('[display] Party-Server error:', (msg as { type: 'error'; message: string }).message);
@@ -161,7 +174,7 @@ export class DisplayConnection {
     this.heartbeatDead = false;
     this.heartbeatTimer = setInterval(() => {
       // Echo to self through the relay — if it comes back, the connection is alive.
-      this.party?.sendTo('display', { type: '_heartbeat' });
+      this.party?.sendTo(DISPLAY_INDEX, { type: '_heartbeat' });
 
       if (Date.now() - this.lastHeartbeatEcho > HEARTBEAT_TIMEOUT_MS) {
         if (!this.heartbeatDead) {
@@ -204,76 +217,77 @@ export class DisplayConnection {
     this.fetchAndRenderQR(this.state.joinUrl);
   }
 
-  private onPeerJoined(clientId: string): void {
-    if (this.state.players.has(clientId)) {
-      // Returning player (same clientId) — refresh their liveness so the
-      // per-viewport disconnect overlay clears.
-      const player = this.state.players.get(clientId)!;
+  private onPeerJoined(peerIndex: number): void {
+    if (this.state.players.has(peerIndex)) {
+      // Returning player (relay reclaimed the slot via clientId match) —
+      // refresh liveness so the per-viewport disconnect overlay clears.
+      const player = this.state.players.get(peerIndex)!;
       player.lastPingTime = Date.now();
-      this.leftDuringRace.delete(clientId);
-      this.callbacks.onPlayerAlive(clientId);
+      this.leftDuringRace.delete(peerIndex);
+      this.callbacks.onPlayerAlive(peerIndex);
       return;
     }
 
     if (this.state.players.size >= MAX_PLAYERS) {
-      this.sendError(clientId, 'room_full', 'Room is full');
+      this.sendError(peerIndex, 'room_full', 'Room is full');
       return;
     }
 
     const carId = this.nextAvailableSlot();
     if (carId < 0) {
-      this.sendError(clientId, 'room_full', 'Room is full');
+      this.sendError(peerIndex, 'room_full', 'Room is full');
       return;
     }
 
     const player: Player = {
-      id: clientId,
+      id: peerIndex,
       name: `P${carId + 1}`,
       color: PLAYER_COLORS[carId % PLAYER_COLORS.length],
       carId,
       lastPingTime: Date.now(),
     };
-    this.state.players.set(clientId, player);
+    this.state.players.set(peerIndex, player);
 
     // Only add to playerOrder in the lobby. Late joiners (mid-race) sit in
     // the players Map and wait — they're absorbed into playerOrder when the
     // display returns to the lobby or starts a new race.
     if (this.callbacks.isAcceptingPlayers()) {
-      this.state.playerOrder.push(clientId);
+      this.state.playerOrder.push(peerIndex);
     }
 
     this.callbacks.onLobbyChanged();
     this.broadcastLobbyUpdate();
   }
 
-  private sendError(clientId: string, code: ErrorCode, message: string): void {
+  private sendError(peerIndex: number, code: ErrorCode, message: string): void {
     const payload: ErrorPayload = { type: MSG.ERROR, code, message };
-    this.party?.sendTo(clientId, payload);
+    this.party?.sendTo(peerIndex, payload);
   }
 
-  private onPeerLeft(clientId: string): void {
-    const player = this.state.players.get(clientId);
+  private onPeerLeft(peerIndex: number): void {
+    const player = this.state.players.get(peerIndex);
     if (!player) return;
 
-    // When a controller reconnects with the same clientId the relay may
-    // deliver peer_joined (new conn) before peer_left (old conn teardown).
-    // If liveness was refreshed very recently, this is a stale leave — ignore.
+    // When a controller reconnects with the same clientId the relay closes
+    // the old socket with code 4000, which can deliver peer_left after the
+    // new socket's traffic has already started refreshing liveness. If
+    // liveness was refreshed very recently, treat this as the stale leave.
     if (Date.now() - player.lastPingTime < HEARTBEAT_INTERVAL_MS) return;
 
     const racing = this.callbacks.getRoomState() !== 'lobby';
-    const isActiveRacer = this.state.playerOrder.includes(clientId);
+    const isActiveRacer = this.state.playerOrder.includes(peerIndex);
 
     if (racing && isActiveRacer) {
       // Active racer — keep in state so the display can show a per-viewport
       // disconnect overlay. Cleaned up on return to lobby.
-      this.leftDuringRace.add(clientId);
-      this.callbacks.onPlayerDead(clientId);
+      this.leftDuringRace.add(peerIndex);
+      this.callbacks.onPlayerDead(peerIndex);
       return;
     }
 
     // Lobby player or late joiner — remove fully.
-    this.state.players.delete(clientId);
-    this.state.playerOrder = this.state.playerOrder.filter((id) => id !== clientId);
+    this.state.players.delete(peerIndex);
+    this.state.playerOrder = this.state.playerOrder.filter((id) => id !== peerIndex);
     this.callbacks.onLobbyChanged();
     this.broadcastLobbyUpdate();
   }
@@ -287,7 +301,7 @@ export class DisplayConnection {
     return -1;
   }
 
-  private handleControllerMessage(from: string, data: any): void {
+  private handleControllerMessage(from: number, data: any): void {
     if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
 
     switch (data.type) {
@@ -378,10 +392,10 @@ export class DisplayConnection {
   }
 
   // Called when the display reconnects and gets back the relay's authoritative
-  // client list. Reconciles local state: marks missing controllers as gone,
+  // peer list. Reconciles local state: marks missing controllers as gone,
   // refreshes liveness for present ones, re-sends WELCOME to all.
-  private onDisplayRejoined(clients: string[]): void {
-    const currentPeers = new Set(clients.filter((id) => id !== 'display'));
+  private onDisplayRejoined(peers: number[]): void {
+    const currentPeers = new Set(peers.filter((idx) => idx !== DISPLAY_INDEX));
 
     // Mark controllers not in the relay's list as disconnected.
     for (const [id] of this.state.players) {
@@ -526,4 +540,3 @@ export class DisplayConnection {
     }
   }
 }
-

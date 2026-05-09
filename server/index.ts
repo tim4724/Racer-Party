@@ -10,7 +10,7 @@
 //   GET /api/qr?text=…    → { size, modules } via `qrcode`
 //   GET /api/baseurl      → { baseUrl } using LAN IP discovery
 //   GET /                 → display index
-//   GET /<ROOM>           → controller index (single 4-letter segment)
+//   GET /<ROOM>           → controller index (6-char base58 room code)
 //   GET /*                → static (or Vite-served in dev)
 
 import { networkInterfaces } from 'node:os';
@@ -26,7 +26,10 @@ const GIT_SHA = (process.env.GIT_SHA || '').trim();
 
 const ROOT = resolve(import.meta.dir, '..');
 const DIST_DIR = join(ROOT, 'dist');
-const ROOM_CODE_RE = /^\/[A-Z0-9]{4}$/;
+// Party-Sockets returns 6-char base58 codes (mixed case, no 0/O/I/l). The
+// regex stays permissive — the relay is the source of truth for what's a
+// valid code.
+const ROOM_CODE_RE = /^\/[A-Za-z0-9]{6}$/;
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',

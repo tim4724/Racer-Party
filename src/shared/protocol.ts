@@ -63,7 +63,9 @@ export interface WelcomePayload {
 
 export interface LobbyUpdatePayload {
   type: typeof MSG.LOBBY_UPDATE;
-  players: Array<{ id: string; name: string; color: string }>;
+  // `id` is the relay peer-slot index. The controller only uses it to count
+  // players, but it's preserved for parity with the display's player table.
+  players: Array<{ id: number; name: string; color: string }>;
 }
 
 export interface CountdownPayload {

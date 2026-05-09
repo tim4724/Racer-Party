@@ -25,7 +25,7 @@ function makeSim(humans: Player[], aiCount: number): RaceSim {
   });
 }
 
-const humanPlayer: Player = { id: 'phone-1', name: 'Alice', color: '#ff7a18', carId: 0 };
+const humanPlayer: Player = { id: 1, name: 'Alice', color: '#ff7a18', carId: 0, lastPingTime: 0 };
 
 describe('RaceSim — race start', () => {
   test('cars stay in place during the countdown freeze (do not reverse)', async () => {

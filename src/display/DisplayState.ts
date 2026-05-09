@@ -4,10 +4,10 @@
 import type { Player } from './DisplayConnection';
 
 export class DisplayState {
-  // Map<clientId, Player>
-  players = new Map<string, Player>();
+  // Map<peerIndex, Player> — peerIndex is the relay-assigned slot id.
+  players = new Map<number, Player>();
   // Insertion order (mirrors join order; used to assign cars to viewports).
-  playerOrder: string[] = [];
+  playerOrder: number[] = [];
   // The room code returned by Party-Sockets after `create`.
   roomCode: string | null = null;
   // The full join URL, e.g. http://192.168.1.10:4000/ABCD

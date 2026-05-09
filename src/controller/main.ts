@@ -4,8 +4,8 @@
 
 import { ControllerGame } from './ControllerGame';
 
-// Party-Sockets room codes are 4 chars: uppercase letters + digits.
-const ROOM_CODE_RE = /^\/([A-Z0-9]{4})$/;
+// Party-Sockets room codes are 6-char base58 (mixed case, no 0/O/I/l).
+const ROOM_CODE_RE = /^\/([A-Za-z0-9]{6})$/;
 const match = window.location.pathname.match(ROOM_CODE_RE);
 const roomCode = match ? match[1] : null;
 
@@ -29,17 +29,16 @@ if (!roomCode) {
   // Check for a prior session BEFORE constructing ControllerGame — its
   // constructor writes a fresh clientId to sessionStorage, so reading
   // after would always be truthy.
-  const rejoinParam = new URLSearchParams(location.search).get('rejoin');
   let hadStoredId = false;
   try { hadStoredId = !!sessionStorage.getItem('racer_client_' + roomCode); } catch { /* ignore */ }
 
   // Construct the game — it binds handlers to form submit / buttons.
   const game = new ControllerGame(roomCode);
 
-  // Auto-connect (skip name screen) when we have a prior session for this
-  // room — either via ?rejoin= URL param or a stored sessionStorage clientId.
-  // This handles both QR-scan rejoin AND browser tab eviction/reload.
-  if (rejoinParam || hadStoredId) {
+  // Auto-connect (skip name screen) when we have a stored clientId for this
+  // room — that's how we recognise the same phone returning after a tab
+  // eviction or reload, and the relay maps the clientId back to the slot.
+  if (hadStoredId) {
     game.join(stored);
   }
 }

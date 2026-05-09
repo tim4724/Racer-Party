@@ -16,10 +16,13 @@ import {
 const PING_INTERVAL_MS = 1000;
 const PONG_TIMEOUT_MS = 3000;
 const INPUT_KEEPALIVE_MS = 50; // ~20 Hz max
+// The display is always the room creator → relay slot 0. Controllers only
+// ever talk to the display, so every sendTo target is this constant.
+const DISPLAY_INDEX = 0;
 
 export interface ControllerConnectionCallbacks {
   onWelcome: (carId: number, color: string, name: string, roomState: string, inGame: boolean) => void;
-  onLobbyUpdate: (players: Array<{ id: string; name: string; color: string }>) => void;
+  onLobbyUpdate: (players: Array<{ id: number; name: string; color: string }>) => void;
   onReturnToLobby: () => void;
   onCountdown: (value: 1 | 2 | 3 | 'GO') => void;
   onRaceStart: () => void;
@@ -56,17 +59,13 @@ export class ControllerConnection {
     this.roomCode = roomCode;
     this.callbacks = callbacks;
 
-    // If the URL has ?rejoin=<id>, use that clientId so the relay recognises
-    // this connection as the same peer that disconnected (same slot, same car).
-    const rejoinId = new URLSearchParams(location.search).get('rejoin');
-
-    // Stable per-room client id, restored across reloads.
-    let id: string | null = rejoinId;
-    if (!id) {
-      try {
-        id = sessionStorage.getItem('racer_client_' + this.roomCode);
-      } catch { /* ignore */ }
-    }
+    // The relay treats clientId as a per-slot bearer secret. Persist it in
+    // sessionStorage so a reload on the same phone reclaims the same slot
+    // (and therefore the same car). We never share it across origins.
+    let id: string | null = null;
+    try {
+      id = sessionStorage.getItem('racer_client_' + this.roomCode);
+    } catch { /* ignore */ }
     if (!id) {
       id = (crypto as any).randomUUID ? crypto.randomUUID() : 'cli-' + Math.random().toString(36).slice(2, 12);
     }
@@ -93,7 +92,7 @@ export class ControllerConnection {
       if (type === 'joined') {
         this.startPing();
         this.callbacks.onConnected();
-        this.party!.sendTo('display', { type: MSG.HELLO, name: this.lastPlayerName });
+        this.party!.sendTo(DISPLAY_INDEX, { type: MSG.HELLO, name: this.lastPlayerName });
       } else if (type === 'error') {
         const message = (msg as { type: 'error'; message: string }).message || 'Connection error';
         // Party-Server level error (room not found, etc.) — surface as
@@ -108,7 +107,7 @@ export class ControllerConnection {
     };
 
     this.party.onMessage = (from, data: any) => {
-      if (from !== 'display') return;
+      if (from !== DISPLAY_INDEX) return;
       this.handleDisplayMessage(data);
     };
 
@@ -215,23 +214,23 @@ export class ControllerConnection {
   // Sent when the player taps START in the lobby. The display decides
   // whether to honor it (based on its own state machine + player count).
   requestStart(): void {
-    this.party?.sendTo('display', { type: MSG.START_RACE });
+    this.party?.sendTo(DISPLAY_INDEX, { type: MSG.START_RACE });
   }
 
   requestPause(): void {
-    this.party?.sendTo('display', { type: MSG.PAUSE_GAME });
+    this.party?.sendTo(DISPLAY_INDEX, { type: MSG.PAUSE_GAME });
   }
 
   requestResume(): void {
-    this.party?.sendTo('display', { type: MSG.RESUME_GAME });
+    this.party?.sendTo(DISPLAY_INDEX, { type: MSG.RESUME_GAME });
   }
 
   requestReturnToLobby(): void {
-    this.party?.sendTo('display', { type: MSG.RETURN_TO_LOBBY });
+    this.party?.sendTo(DISPLAY_INDEX, { type: MSG.RETURN_TO_LOBBY });
   }
 
   requestPlayAgain(): void {
-    this.party?.sendTo('display', { type: MSG.PLAY_AGAIN });
+    this.party?.sendTo(DISPLAY_INDEX, { type: MSG.PLAY_AGAIN });
   }
 
   // Synchronous LEAVE + close — used when the player explicitly backs out
@@ -242,7 +241,7 @@ export class ControllerConnection {
     this.gameCancelled = true;
     this.stopPing();
     if (this.party) {
-      try { this.party.sendTo('display', { type: MSG.LEAVE }); } catch { /* ignore */ }
+      try { this.party.sendTo(DISPLAY_INDEX, { type: MSG.LEAVE }); } catch { /* ignore */ }
       this.party.close();
       this.party = null;
     }
@@ -260,7 +259,7 @@ export class ControllerConnection {
     if (!changed && !overdue) return;
     this.lastInputState = { steer: input.steer, brake: input.brake };
     this.lastInputSent = now;
-    this.party.sendTo('display', { type: MSG.INPUT, steer: input.steer, brake: input.brake });
+    this.party.sendTo(DISPLAY_INDEX, { type: MSG.INPUT, steer: input.steer, brake: input.brake });
   }
 
   // ---- Ping / Pong ----
@@ -270,7 +269,7 @@ export class ControllerConnection {
     this.lastPongTime = Date.now();
     this.pongTimedOut = false;
     this.pingTimer = setInterval(() => {
-      this.party?.sendTo('display', { type: MSG.PING, t: Date.now() });
+      this.party?.sendTo(DISPLAY_INDEX, { type: MSG.PING, t: Date.now() });
       if (Date.now() - this.lastPongTime > PONG_TIMEOUT_MS) {
         this.updatePingDisplay(-1);
         // Show disconnect overlay once when pongs stop arriving.

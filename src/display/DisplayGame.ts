@@ -52,9 +52,9 @@ export class DisplayGame {
     this.state = new DisplayState();
     this.connection = new DisplayConnection(this.state, {
       onLobbyChanged: () => this.renderLobby(),
-      onPlayerInput: (clientId, input) => {
+      onPlayerInput: (peerIndex, input) => {
         // Inputs only matter once we have a sim. Late inputs in lobby ignored.
-        this.sim?.applyHumanInput(clientId, input);
+        this.sim?.applyHumanInput(peerIndex, input);
       },
       onStartRequested: () => {
         // Phone tapped "Start" — gate on current state and player count.
@@ -72,8 +72,8 @@ export class DisplayGame {
       },
       onRelayLost: (attempt, max, exhausted) => this.onRelayLost(attempt, max, exhausted),
       onRelayRestored: () => this.onRelayRestored(),
-      onPlayerAlive: (clientId) => this.onPlayerAlive(clientId),
-      onPlayerDead: (clientId) => this.onPlayerDead(clientId),
+      onPlayerAlive: (peerIndex) => this.onPlayerAlive(peerIndex),
+      onPlayerDead: (peerIndex) => this.onPlayerDead(peerIndex),
       isAcceptingPlayers: () => this.roomState === ROOM_STATE.LOBBY,
       getRoomState: () => this.roomState,
     });
@@ -371,15 +371,15 @@ export class DisplayGame {
     document.getElementById('display-reconnect-overlay')?.classList.add('hidden');
   }
 
-  private onPlayerAlive(clientId: string): void {
-    const player = this.state.players.get(clientId);
+  private onPlayerAlive(peerIndex: number): void {
+    const player = this.state.players.get(peerIndex);
     if (player && this.hud) this.hud.setDisconnected(player.carId, false);
   }
 
-  private onPlayerDead(clientId: string): void {
+  private onPlayerDead(peerIndex: number): void {
     if (this.roomState !== ROOM_STATE.RACING && this.roomState !== ROOM_STATE.COUNTDOWN) return;
-    const player = this.state.players.get(clientId);
-    if (player && this.hud) this.hud.setDisconnected(player.carId, true, clientId);
+    const player = this.state.players.get(peerIndex);
+    if (player && this.hud) this.hud.setDisconnected(player.carId, true);
   }
 
   resetToWelcome(): void {
