@@ -143,6 +143,18 @@ export class RaceSim {
     if (car) car.applyInput(input);
   }
 
+  // Rebind a car to a new peer index. Called when a different phone scans
+  // the disconnect-overlay QR and takes over an orphaned slot. Clears the
+  // car's last input so a stuck steer/brake from the previous driver
+  // doesn't carry over while the new phone's first INPUT is in flight.
+  reassignDriver(oldPeerIndex: number, newPeerIndex: number): void {
+    const carId = this.clientToCarId.get(oldPeerIndex);
+    if (carId === undefined) return;
+    this.clientToCarId.delete(oldPeerIndex);
+    this.clientToCarId.set(newPeerIndex, carId);
+    this.cars[carId]?.applyInput({ steer: 0, brake: 0 });
+  }
+
   // Promote an AI car to a human-driven slot. Used by the keyboard debug
   // path: with `?debug=1` and no real phones connected, the first AI car is
   // taken over by the keyboard. Removes the AI driver so it can no longer

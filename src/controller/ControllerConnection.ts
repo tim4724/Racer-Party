@@ -73,7 +73,7 @@ export class ControllerConnection {
     this.clientId = id;
   }
 
-  connect(playerName: string): void {
+  connect(playerName: string, rejoinCarId?: number): void {
     if (this.party) this.party.close();
 
     // A fresh connect attempt clears the cancelled flag — the user explicitly
@@ -92,7 +92,16 @@ export class ControllerConnection {
       if (type === 'joined') {
         this.startPing();
         this.callbacks.onConnected();
-        this.party!.sendTo(DISPLAY_INDEX, { type: MSG.HELLO, name: this.lastPlayerName });
+        // Include the rejoin hint only on the first HELLO. Subsequent
+        // reconnects in the same session don't re-send it because the
+        // display already swapped us into the slot.
+        const hello: { type: string; name: string; rejoinCarId?: number } = {
+          type: MSG.HELLO,
+          name: this.lastPlayerName,
+        };
+        if (rejoinCarId !== undefined) hello.rejoinCarId = rejoinCarId;
+        this.party!.sendTo(DISPLAY_INDEX, hello);
+        rejoinCarId = undefined;
       } else if (type === 'error') {
         const message = (msg as { type: 'error'; message: string }).message || 'Connection error';
         // Party-Server level error (room not found, etc.) — surface as

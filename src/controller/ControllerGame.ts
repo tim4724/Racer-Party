@@ -41,6 +41,9 @@ export class ControllerGame {
   playerName: string | null = null;
   playerCount = 1;
   currentScreen: ScreenId = 'name-screen';
+  // Set when the URL has ?rejoin=<carId> — passed to the display via HELLO
+  // so it can swap us into the orphaned slot. Cleared after first use.
+  private rejoinCarId: number | null = null;
   private muted = false;
   // True when this controller joined while a race was already running. Stays
   // set until the display returns to the lobby; while set we ignore the
@@ -62,6 +65,11 @@ export class ControllerGame {
 
   constructor(roomCode: string) {
     this.roomCode = roomCode;
+    const rejoinParam = new URLSearchParams(location.search).get('rejoin');
+    if (rejoinParam !== null) {
+      const parsed = Number(rejoinParam);
+      if (Number.isInteger(parsed) && parsed >= 0) this.rejoinCarId = parsed;
+    }
     this.connection = new ControllerConnection({
       roomCode,
       onWelcome: (carId, color, name, roomState, inGame) => this.onWelcome(carId, color, name, roomState, inGame),
@@ -167,7 +175,9 @@ export class ControllerGame {
     const status = document.getElementById('status-text') as HTMLParagraphElement | null;
     if (status) status.textContent = 'Connecting…';
 
-    this.connection.connect(name);
+    this.connection.connect(name, this.rejoinCarId ?? undefined);
+    // One-shot — don't re-send the hint on subsequent reconnects in this session.
+    this.rejoinCarId = null;
   }
 
   // -------------------------------------------------------------------------

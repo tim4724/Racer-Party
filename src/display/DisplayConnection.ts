@@ -60,6 +60,9 @@ export interface DisplayConnectionCallbacks {
   // no messages have been received within the timeout (dead).
   onPlayerAlive: (peerIndex: number) => void;
   onPlayerDead: (peerIndex: number) => void;
+  // A new peer took over an orphaned slot via the disconnect-overlay QR.
+  // The sim needs to rebind input routing from the old peer index to the new.
+  onPlayerRejoined: (oldPeerIndex: number, newPeerIndex: number, carId: number) => void;
   // Returns true if new players are still allowed (i.e. lobby state, room not full).
   isAcceptingPlayers: () => boolean;
   // Current room state — echoed to the joining controller via WELCOME so it
@@ -189,10 +192,17 @@ export class DisplayConnection {
         this.callbacks.onRelayRestored();
       }
 
-      // Per-controller liveness check.
+      // Per-controller liveness check. A stale player who's part of the
+      // active race becomes an orphan in leftDuringRace so a fresh phone
+      // can reclaim their slot via the disconnect-overlay QR — even if
+      // we never received peer_left (e.g. relay closed before delivery).
       const now = Date.now();
+      const racing = this.callbacks.getRoomState() !== 'lobby';
       for (const player of this.state.players.values()) {
         if (now - player.lastPingTime > HEARTBEAT_TIMEOUT_MS) {
+          if (racing && this.state.playerOrder.includes(player.id)) {
+            this.leftDuringRace.add(player.id);
+          }
           this.callbacks.onPlayerDead(player.id);
         }
       }
@@ -228,7 +238,11 @@ export class DisplayConnection {
       return;
     }
 
-    if (this.state.players.size >= MAX_PLAYERS) {
+    // Capacity counts only active players — orphan slots from mid-race
+    // disconnects are reclaimable by a fresh phone (e.g. someone scanning
+    // the disconnect-overlay QR with a different device).
+    const activeCount = this.state.players.size - this.leftDuringRace.size;
+    if (activeCount >= MAX_PLAYERS) {
       this.sendError(peerIndex, 'room_full', 'Room is full');
       return;
     }
@@ -237,6 +251,22 @@ export class DisplayConnection {
     if (carId < 0) {
       this.sendError(peerIndex, 'room_full', 'Room is full');
       return;
+    }
+
+    // If an orphan still holds this carId, drop them — we don't want two
+    // players in the same slot. The HELLO handler may later swap us into
+    // a different orphan slot if the URL rejoin hint points elsewhere.
+    let displaced: number | null = null;
+    for (const idx of this.leftDuringRace) {
+      const p = this.state.players.get(idx);
+      if (p && p.carId === carId) { displaced = idx; break; }
+    }
+    if (displaced !== null) {
+      this.state.players.delete(displaced);
+      this.leftDuringRace.delete(displaced);
+      const orderIdx = this.state.playerOrder.indexOf(displaced);
+      if (orderIdx >= 0) this.state.playerOrder[orderIdx] = peerIndex;
+      this.callbacks.onPlayerRejoined(displaced, peerIndex, carId);
     }
 
     const player: Player = {
@@ -248,10 +278,10 @@ export class DisplayConnection {
     };
     this.state.players.set(peerIndex, player);
 
-    // Only add to playerOrder in the lobby. Late joiners (mid-race) sit in
-    // the players Map and wait — they're absorbed into playerOrder when the
-    // display returns to the lobby or starts a new race.
-    if (this.callbacks.isAcceptingPlayers()) {
+    // Only add to playerOrder when the lobby accepts. Mid-race auto-displace
+    // already replaced the orphan in playerOrder above. Late joiners not
+    // taking over an orphan sit out until absorbLateJoiners runs.
+    if (displaced === null && this.callbacks.isAcceptingPlayers()) {
       this.state.playerOrder.push(peerIndex);
     }
 
@@ -268,11 +298,9 @@ export class DisplayConnection {
     const player = this.state.players.get(peerIndex);
     if (!player) return;
 
-    // When a controller reconnects with the same clientId the relay closes
-    // the old socket with code 4000, which can deliver peer_left after the
-    // new socket's traffic has already started refreshing liveness. If
-    // liveness was refreshed very recently, treat this as the stale leave.
-    if (Date.now() - player.lastPingTime < HEARTBEAT_INTERVAL_MS) return;
+    // The new relay never emits peer_left for a reconnect-replace (the old
+    // ws is closed with code 4000 and removeFromRoom skips broadcast), so
+    // any peer_left that reaches us is a genuine disconnect.
 
     const racing = this.callbacks.getRoomState() !== 'lobby';
     const isActiveRacer = this.state.playerOrder.includes(peerIndex);
@@ -293,12 +321,54 @@ export class DisplayConnection {
   }
 
   private nextAvailableSlot(): number {
+    // Orphan slots (mid-race disconnects in leftDuringRace) are
+    // considered free here — a fresh phone may displace them.
     const used = new Set<number>();
-    for (const p of this.state.players.values()) used.add(p.carId);
+    for (const [idx, p] of this.state.players) {
+      if (this.leftDuringRace.has(idx)) continue;
+      used.add(p.carId);
+    }
     for (let i = 0; i < MAX_PLAYERS; i++) {
       if (!used.has(i)) return i;
     }
     return -1;
+  }
+
+  // Take over an orphaned racer's car slot. Called from the HELLO handler
+  // when a controller arrives with ?rejoin=<carId>. No-op if the carId
+  // isn't currently disconnected (so an attacker scanning a stale QR
+  // can't displace an active player).
+  private tryRejoinSlot(newPeerIndex: number, carId: number): void {
+    let oldPeerIndex: number | null = null;
+    for (const idx of this.leftDuringRace) {
+      const orphan = this.state.players.get(idx);
+      if (orphan && orphan.carId === carId) {
+        oldPeerIndex = idx;
+        break;
+      }
+    }
+    if (oldPeerIndex === null) return;
+
+    const newPlayer = this.state.players.get(newPeerIndex);
+    if (!newPlayer) return;
+
+    // Drop the orphan; keep the new peer but rewrite their slot.
+    this.state.players.delete(oldPeerIndex);
+    this.leftDuringRace.delete(oldPeerIndex);
+    newPlayer.carId = carId;
+    newPlayer.color = PLAYER_COLORS[carId % PLAYER_COLORS.length];
+
+    // Replace the orphan in playerOrder so the new peer inherits its position.
+    const orderIdx = this.state.playerOrder.indexOf(oldPeerIndex);
+    if (orderIdx >= 0) {
+      this.state.playerOrder[orderIdx] = newPeerIndex;
+    } else if (!this.state.playerOrder.includes(newPeerIndex)) {
+      this.state.playerOrder.push(newPeerIndex);
+    }
+
+    this.callbacks.onPlayerRejoined(oldPeerIndex, newPeerIndex, carId);
+    this.callbacks.onLobbyChanged();
+    this.broadcastLobbyUpdate();
   }
 
   private handleControllerMessage(from: number, data: any): void {
@@ -312,6 +382,11 @@ export class DisplayConnection {
           // leave the "Connecting…" state cleanly.
           this.sendError(from, 'room_full', 'Room is full');
           break;
+        }
+        // Rejoin hint: if the URL had ?rejoin=<carId> and that carId is
+        // currently orphaned, swap this peer into the orphan's slot.
+        if (typeof data.rejoinCarId === 'number') {
+          this.tryRejoinSlot(from, data.rejoinCarId);
         }
         if (typeof data.name === 'string' && data.name.trim()) {
           player.name = data.name.trim().slice(0, 16);

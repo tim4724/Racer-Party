@@ -31,14 +31,18 @@ if (!roomCode) {
   // after would always be truthy.
   let hadStoredId = false;
   try { hadStoredId = !!sessionStorage.getItem('racer_client_' + roomCode); } catch { /* ignore */ }
+  // ?rejoin=<carId> arrives when a different phone scans an in-game
+  // disconnect-overlay QR — auto-connect so the new phone takes over the
+  // orphaned slot without going through the name screen first.
+  const hasRejoinHint = new URLSearchParams(location.search).has('rejoin');
 
   // Construct the game — it binds handlers to form submit / buttons.
   const game = new ControllerGame(roomCode);
 
-  // Auto-connect (skip name screen) when we have a stored clientId for this
-  // room — that's how we recognise the same phone returning after a tab
-  // eviction or reload, and the relay maps the clientId back to the slot.
-  if (hadStoredId) {
+  // Auto-connect (skip name screen) on either a stored sessionStorage
+  // clientId (same phone reload) or a rejoin URL hint (different phone
+  // taking over a disconnected slot).
+  if (hadStoredId || hasRejoinHint) {
     game.join(stored);
   }
 }

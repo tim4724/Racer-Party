@@ -74,6 +74,12 @@ export class DisplayGame {
       onRelayRestored: () => this.onRelayRestored(),
       onPlayerAlive: (peerIndex) => this.onPlayerAlive(peerIndex),
       onPlayerDead: (peerIndex) => this.onPlayerDead(peerIndex),
+      onPlayerRejoined: (oldIdx, newIdx, carId) => {
+        this.sim?.reassignDriver(oldIdx, newIdx);
+        // Hide the disconnect overlay on this car's viewport — a new
+        // driver is now sitting in the seat.
+        if (this.hud) this.hud.setDisconnected(carId, false);
+      },
       isAcceptingPlayers: () => this.roomState === ROOM_STATE.LOBBY,
       getRoomState: () => this.roomState,
     });

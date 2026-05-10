@@ -46,23 +46,23 @@ export class Hud {
     this.joinUrl = url;
   }
 
-  // Show the disconnect overlay on a specific car's viewport.
+  // Show the disconnect overlay on a specific car's viewport. The carId
+  // doubles as the rejoin token: any phone that scans the QR sends it
+  // back via HELLO and the display swaps them into the orphaned slot.
   setDisconnected(carId: number, disconnected: boolean): void {
     const idx = this.split.cars.findIndex((c) => c.carId === carId);
     if (idx < 0) return;
     const dc = this.disconnectDivs[idx];
     if (!dc) return;
     dc.classList.toggle('hidden', !disconnected);
-    if (disconnected) this.renderQR(dc);
+    if (disconnected) this.renderQR(dc, carId);
   }
 
-  private renderQR(dc: HTMLDivElement): void {
+  private renderQR(dc: HTMLDivElement, carId: number): void {
     if (!this.joinUrl) return;
-    // The relay's clientId is now a server-side bearer secret that never
-    // crosses the wire, so we can't embed a per-slot token in the QR. The
-    // same phone reclaims its slot through sessionStorage; a different
-    // phone scanning the QR gets a fresh slot.
-    const url = this.joinUrl;
+    // ?rejoin=<carId> tells the joining phone which orphaned slot it's
+    // claiming. The token isn't secret — it's just a hint for the display.
+    const url = this.joinUrl + '?rejoin=' + carId;
     const canvas = dc.querySelector('.viewport-disconnect-qr') as HTMLCanvasElement | null;
     if (!canvas || canvas.dataset.rendered === url) return;
     canvas.dataset.rendered = url;
