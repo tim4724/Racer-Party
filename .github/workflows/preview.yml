@@ -120,21 +120,6 @@ jobs:
               - protocol: TCP
           NETPOL
 
-          # Copy the *.couch-games.com wildcard TLS into the preview namespace.
-          TLS_CRT=$(kubectl get secret couch-games-wildcard-tls -n default -o jsonpath='{.data.tls\.crt}')
-          TLS_KEY=$(kubectl get secret couch-games-wildcard-tls -n default -o jsonpath='{.data.tls\.key}')
-
-          cat <<EOS | kubectl apply -n "$NS" -f -
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: couch-games-wildcard-tls
-          type: kubernetes.io/tls
-          data:
-            tls.crt: ${TLS_CRT}
-            tls.key: ${TLS_KEY}
-          EOS
-
           cat <<EOF | kubectl apply -n "$NS" -f -
           apiVersion: apps/v1
           kind: Deployment
@@ -198,8 +183,7 @@ jobs:
                 services:
                   - name: racer
                     port: 4000
-            tls:
-              secretName: couch-games-wildcard-tls
+            tls: {}
           ---
           apiVersion: traefik.io/v1alpha1
           kind: IngressRoute
